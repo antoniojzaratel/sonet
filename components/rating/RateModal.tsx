@@ -229,7 +229,7 @@ export function RateModal({ visible, onClose }: Props) {
                 <TouchableOpacity
                   key={delta}
                   style={styles.halfBtn}
-                  onPress={() => setScore((prev) => Math.max(1, Math.min(10, +(prev + delta).toFixed(1)))}
+                  onPress={() => setScore((prev) => Math.max(1, Math.min(10, +(prev + delta).toFixed(1))))}
                 >
                   <Text style={styles.halfBtnText}>{delta > 0 ? '+0.5' : '-0.5'}</Text>
                 </TouchableOpacity>

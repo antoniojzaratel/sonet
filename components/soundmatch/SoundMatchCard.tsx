@@ -89,7 +89,7 @@ export function SoundMatchCard({ candidate, compatBreakdown, onLike, onPass, onS
       ]}
       {...(isTop ? panResponder.panHandlers : {})}
     >
-      <LinearGradient colors={['#1A1A3E', '#0D0D0D']} style={StyleSheet.absoluteFill} borderRadius={Radius.xl} />
+      <LinearGradient colors={['#1A1A3E', '#0D0D0D']} style={StyleSheet.absoluteFill} />
 
       {/* Like / Pass overlays */}
       {isTop && (

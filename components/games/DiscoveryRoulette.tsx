@@ -114,8 +114,7 @@ export function DiscoveryRoulette({ onExit }: Props) {
         >
           <LinearGradient
             colors={[Colors.surface, Colors.background]}
-            style={StyleSheet.absoluteFill}
-            borderRadius={Radius.xl}
+            style={[StyleSheet.absoluteFill, { borderRadius: Radius.xl }]}
           />
           <Text style={styles.songEmoji}>{song.emoji}</Text>
           <Text style={styles.songName}>{song.name}</Text>

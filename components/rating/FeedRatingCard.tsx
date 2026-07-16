@@ -66,7 +66,6 @@ export function FeedRatingCard({ rating, user }: Props) {
           <LinearGradient
             colors={[`${scoreColor}30`, `${scoreColor}10`]}
             style={StyleSheet.absoluteFill}
-            borderRadius={Radius.lg}
           />
           <Text style={[styles.scoreText, { color: scoreColor }]}>{rating.score.toFixed(1)}</Text>
         </View>

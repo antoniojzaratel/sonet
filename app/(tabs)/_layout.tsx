@@ -1,31 +1,41 @@
 import { Tabs } from 'expo-router';
-import { View, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors } from '@/constants/colors';
 
-function TabIcon({ name, focused }: { name: any; focused: boolean }) {
+interface TabIconProps {
+  iconName: any;
+  label: string;
+  focused: boolean;
+}
+
+function TabIcon({ iconName, label, focused }: TabIconProps) {
+  const color = focused ? Colors.primary : '#555';
   return (
-    <View style={[styles.iconWrapper, focused && styles.iconWrapperActive]}>
+    <View style={styles.tabItem}>
       <Ionicons
-        name={focused ? name : (`${name}-outline` as any)}
+        name={focused ? iconName : (`${iconName}-outline` as any)}
         size={22}
-        color={focused ? Colors.primary : Colors.textMuted}
+        color={color}
       />
+      <Text style={[styles.tabLabel, { color }]}>{label}</Text>
     </View>
   );
 }
 
 function CenterIcon({ focused }: { focused: boolean }) {
   return (
-    <LinearGradient
-      colors={focused ? [Colors.accent, '#C026D3'] : [Colors.primary, Colors.primaryDark]}
-      style={styles.centerButton}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-    >
-      <Ionicons name="heart" size={26} color="#fff" />
-    </LinearGradient>
+    <View style={styles.centerWrapper}>
+      <LinearGradient
+        colors={['#A855F7', '#7C3AED']}
+        style={styles.centerButton}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+      >
+        <Ionicons name="add" size={30} color="#fff" />
+      </LinearGradient>
+    </View>
   );
 }
 
@@ -37,32 +47,41 @@ export default function TabsLayout() {
         tabBarStyle: styles.tabBar,
         tabBarShowLabel: false,
         tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: Colors.textMuted,
+        tabBarInactiveTintColor: '#555',
       }}
     >
       <Tabs.Screen
-        name="index"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon name="home" focused={focused} /> }}
+        name="profile"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon iconName="person" label="Perfil" focused={focused} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="map"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon iconName="ticket" label="Eventos" focused={focused} />
+          ),
+        }}
       />
       <Tabs.Screen
         name="discover"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon name="people" focused={focused} /> }}
-      />
-      <Tabs.Screen
-        name="date"
         options={{
           tabBarIcon: ({ focused }) => <CenterIcon focused={focused} />,
         }}
       />
       <Tabs.Screen
-        name="map"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon name="map" focused={focused} /> }}
+        name="index"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon iconName="list" label="Feed" focused={focused} />
+          ),
+        }}
       />
-      <Tabs.Screen
-        name="profile"
-        options={{ tabBarIcon: ({ focused }) => <TabIcon name="person" focused={focused} /> }}
-      />
-      {/* Hidden screens - accessible via navigation */}
+      {/* Hidden screens */}
+      <Tabs.Screen name="date" options={{ href: null }} />
       <Tabs.Screen name="games" options={{ href: null }} />
     </Tabs>
   );
@@ -71,31 +90,38 @@ export default function TabsLayout() {
 const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: Colors.surface,
-    borderTopColor: Colors.border,
+    borderTopColor: '#1F1F1F',
     borderTopWidth: 1,
-    height: 82,
-    paddingBottom: 22,
-    paddingTop: 8,
+    height: 86,
+    paddingBottom: 0,
+    paddingTop: 0,
   },
-  iconWrapper: {
-    width: 44,
-    height: 36,
+  tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    gap: 4,
+    paddingTop: 10,
   },
-  iconWrapperActive: { backgroundColor: `${Colors.primary}18` },
+  tabLabel: {
+    fontSize: 10,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+  },
+  centerWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
   centerButton: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
-    shadowColor: Colors.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 10,
-    elevation: 8,
+    shadowColor: '#A855F7',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 10,
   },
 });

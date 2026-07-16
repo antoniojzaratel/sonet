@@ -1,120 +1,150 @@
-import { useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  FlatList,
-  StyleSheet,
-  TouchableOpacity,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useSocialStore } from '@/stores/socialStore';
-import { useAuthStore } from '@/stores/authStore';
-import { MatchCard } from '@/components/social/MatchCard';
-import { Colors, Spacing } from '@/constants/colors';
+import Svg, { Circle } from 'react-native-svg';
 
-type Tab = 'matches' | 'following';
+function Ring({ score, size = 64 }: { score: number; size?: number }) {
+  const r = (size - 10) / 2;
+  const circ = 2 * Math.PI * r;
+  const fill = circ * (score / 100);
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} style={{ position: 'absolute' }}>
+        <Circle cx={size / 2} cy={size / 2} r={r} stroke="#2A2A2A" strokeWidth={6} fill="none" />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="#A855F7"
+          strokeWidth={6}
+          fill="none"
+          strokeDasharray={`${fill} ${circ}`}
+          strokeLinecap="round"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </Svg>
+      <Text style={{ color: '#fff', fontSize: size * 0.28, fontWeight: '800' }}>{score}</Text>
+    </View>
+  );
+}
+
+const FRIENDS: { score: number; name: string; subtitle: string }[] = [
+  { score: 91, name: 'Mariana G.', subtitle: '7 artistas en común · ya se siguen' },
+];
+
+const NEW_PEOPLE: { score: number; name: string; tags: string }[] = [
+  { score: 84, name: 'Diego R.', tags: 'Zoé · Caifanes · indie rock' },
+  { score: 72, name: 'Sofía T.', tags: 'Rock en español · 4 artistas' },
+];
 
 export default function DiscoverScreen() {
-  const [activeTab, setActiveTab] = useState<Tab>('matches');
-  const { matches, loadingMatches, fetchMatches } = useSocialStore();
-  const { user } = useAuthStore();
-
-  useEffect(() => {
-    if (user?.id) fetchMatches(user.id);
-  }, [user?.id]);
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Descubrir</Text>
-        <Text style={styles.subtitle}>Gente con tu mismo gusto musical</Text>
-      </View>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
+        <Text style={styles.header}>Matches</Text>
 
-      <View style={styles.tabs}>
-        {(['matches', 'following'] as Tab[]).map((tab) => (
-          <TouchableOpacity
-            key={tab}
-            style={[styles.tab, activeTab === tab && styles.tabActive]}
-            onPress={() => setActiveTab(tab)}
-          >
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab === 'matches' ? '🎯 Taste Match' : '👥 Siguiendo'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {activeTab === 'matches' && (
-        <>
-          {loadingMatches ? (
-            <View style={styles.centered}>
-              <ActivityIndicator size="large" color={Colors.primary} />
-              <Text style={styles.loadingText}>Calculando compatibilidades...</Text>
+        {/* Amigos que van */}
+        <Text style={styles.sectionTitle}>AMIGOS QUE VAN</Text>
+        {FRIENDS.map((f) => (
+          <View key={f.name} style={styles.card}>
+            <Ring score={f.score} size={72} />
+            <View style={styles.cardInfo}>
+              <Text style={styles.cardName}>{f.name}</Text>
+              <Text style={styles.cardSub}>{f.subtitle}</Text>
             </View>
-          ) : (
-            <FlatList
-              data={matches}
-              keyExtractor={(item) => item.user.id}
-              renderItem={({ item }) => <MatchCard match={item} />}
-              ListEmptyComponent={
-                <View style={styles.empty}>
-                  <Text style={styles.emptyEmoji}>🎸</Text>
-                  <Text style={styles.emptyTitle}>Sin matches aún</Text>
-                  <Text style={styles.emptyText}>
-                    Califica más música para encontrar personas con tu mismo gusto
-                  </Text>
-                </View>
-              }
-              contentContainerStyle={matches.length === 0 ? { flex: 1 } : styles.list}
-              showsVerticalScrollIndicator={false}
-            />
-          )}
-        </>
-      )}
+            <TouchableOpacity style={styles.btnOutlined} activeOpacity={0.7}>
+              <Text style={styles.btnOutlinedText}>Ir juntos</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
 
-      {activeTab === 'following' && (
-        <View style={styles.centered}>
-          <Text style={styles.emptyEmoji}>👥</Text>
-          <Text style={styles.emptyTitle}>Tus seguidores</Text>
-          <Text style={styles.emptyText}>Aquí verás a la gente que sigues</Text>
+        {/* Gente nueva compatible */}
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitle}>GENTE NUEVA COMPATIBLE</Text>
         </View>
-      )}
+        {NEW_PEOPLE.map((p) => (
+          <View key={p.name} style={styles.card}>
+            <Ring score={p.score} size={72} />
+            <View style={styles.cardInfo}>
+              <Text style={styles.cardName}>{p.name}</Text>
+              <Text style={styles.cardSub}>{p.tags}</Text>
+            </View>
+            <TouchableOpacity style={styles.btnFilled} activeOpacity={0.7}>
+              <Text style={styles.btnFilledText}>Conectar</Text>
+            </TouchableOpacity>
+          </View>
+        ))}
+
+        {/* Safety note */}
+        <View style={styles.safetyBox}>
+          <Text style={styles.safetyText}>
+            🔒 Sonet cuida tus encuentros: perfiles verificados por teléfono, bloqueo y reporte a un
+            toque, y las direcciones privadas solo se muestran a asistentes aprobados.
+          </Text>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md, paddingBottom: Spacing.sm },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.text },
-  subtitle: { fontSize: 14, color: Colors.textSecondary, marginTop: 2 },
+  container: { flex: 1, backgroundColor: '#0D0D0D' },
+  scroll: { paddingHorizontal: 20, paddingBottom: 32 },
 
-  tabs: {
+  header: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    paddingTop: 20,
+    paddingBottom: 24,
+  },
+
+  sectionTitle: {
+    fontSize: 11,
+    color: '#666666',
+    fontWeight: '600',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+    marginBottom: 12,
+    marginTop: 8,
+  },
+  sectionRow: { marginTop: 8 },
+
+  card: {
     flexDirection: 'row',
-    paddingHorizontal: Spacing.lg,
-    gap: Spacing.sm,
-    marginBottom: Spacing.md,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 20,
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
   },
-  tabActive: { backgroundColor: `${Colors.primary}20`, borderColor: Colors.primary },
-  tabText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
-  tabTextActive: { color: Colors.primaryLight },
+  cardInfo: { flex: 1, marginLeft: 16 },
+  cardName: { color: '#FFFFFF', fontWeight: '700', fontSize: 16, marginBottom: 4 },
+  cardSub: { color: '#A0A0A0', fontSize: 13 },
 
-  list: { paddingHorizontal: Spacing.lg, paddingBottom: 20, gap: Spacing.sm },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md },
-  loadingText: { color: Colors.textSecondary, fontSize: 14, marginTop: Spacing.sm },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.md, padding: Spacing.xxl },
-  emptyEmoji: { fontSize: 56 },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: Colors.text },
-  emptyText: { fontSize: 14, color: Colors.textSecondary, textAlign: 'center', lineHeight: 20 },
+  btnOutlined: {
+    borderWidth: 1,
+    borderColor: '#A855F7',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  btnOutlinedText: { color: '#A855F7', fontWeight: '600', fontSize: 14 },
+
+  btnFilled: {
+    backgroundColor: '#A855F7',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+  },
+  btnFilledText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
+
+  safetyBox: {
+    backgroundColor: '#0D0A1A',
+    borderWidth: 1,
+    borderColor: '#A855F7',
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 16,
+  },
+  safetyText: { color: '#A0A0A0', fontSize: 13, lineHeight: 20 },
 });

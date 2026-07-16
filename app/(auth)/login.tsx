@@ -9,17 +9,29 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
-import { Colors, Spacing, Radius } from '@/constants/colors';
+
+const C = {
+  primary: '#A855F7',
+  primaryDark: '#7C3AED',
+  background: '#0D0D0D',
+  surface: '#1A1A1A',
+  text: '#FFFFFF',
+  textSecondary: '#A0A0A0',
+  border: '#2A2A2A',
+  borderLight: '#333333',
+};
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showEmailForm, setShowEmailForm] = useState(false);
 
   const handleEmailLogin = async () => {
     if (!email || !password) {
@@ -47,147 +59,272 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <LinearGradient colors={['#1A0A2E', '#0D0D0D']} style={StyleSheet.absoluteFill} />
+      <LinearGradient
+        colors={['#0D0B1E', '#0D0D0D']}
+        style={StyleSheet.absoluteFill}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+      />
 
-      <View style={styles.header}>
-        <Text style={styles.logo}>🎵 Sonet</Text>
-        <Text style={styles.tagline}>Tu mundo musical, tu comunidad</Text>
-      </View>
-
-      <View style={styles.form}>
-        <View style={styles.inputWrapper}>
-          <Ionicons name="mail-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Email"
-            placeholderTextColor={Colors.textMuted}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
+      <ScrollView
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Logo section */}
+        <View style={styles.logoSection}>
+          <Text style={styles.logo}>Sonet</Text>
+          <Text style={styles.tagline}>
+            {'La música que escuchas,\nen vivo y acompañado.'}
+          </Text>
         </View>
 
-        <View style={styles.inputWrapper}>
-          <Ionicons name="lock-closed-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-          <TextInput
-            style={styles.input}
-            placeholder="Contraseña"
-            placeholderTextColor={Colors.textMuted}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
-        </View>
+        {/* Buttons */}
+        <View style={styles.buttons}>
+          {/* Google */}
+          <TouchableOpacity onPress={handleGoogleLogin} activeOpacity={0.85}>
+            <LinearGradient
+              colors={[C.primary, C.primaryDark]}
+              style={styles.googleButton}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <Ionicons name="logo-google" size={20} color="#fff" />
+              <Text style={styles.googleButtonText}>Continuar con Google</Text>
+            </LinearGradient>
+          </TouchableOpacity>
 
-        <TouchableOpacity onPress={handleEmailLogin} disabled={loading} activeOpacity={0.8}>
-          <LinearGradient
-            colors={[Colors.primary, Colors.primaryDark]}
-            style={styles.primaryButton}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
+          {/* Apple */}
+          <TouchableOpacity
+            style={styles.appleButton}
+            onPress={handleAppleLogin}
+            activeOpacity={0.85}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Entrar</Text>
-            )}
-          </LinearGradient>
-        </TouchableOpacity>
+            <Ionicons name="logo-apple" size={20} color={C.text} />
+            <Text style={styles.appleButtonText}>Continuar con Apple</Text>
+          </TouchableOpacity>
 
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>o continúa con</Text>
-          <View style={styles.dividerLine} />
+          {/* Email toggle */}
+          <TouchableOpacity
+            onPress={() => setShowEmailForm((v) => !v)}
+            activeOpacity={0.7}
+            style={styles.emailToggle}
+          >
+            <Text style={styles.emailToggleText}>Usar mi correo</Text>
+          </TouchableOpacity>
+
+          {/* Email form */}
+          {showEmailForm && (
+            <View style={styles.emailForm}>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="mail-outline" size={18} color="#555" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Correo electrónico"
+                  placeholderTextColor="#555"
+                  value={email}
+                  onChangeText={setEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+
+              <View style={styles.inputWrapper}>
+                <Ionicons name="lock-closed-outline" size={18} color="#555" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Contraseña"
+                  placeholderTextColor="#555"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                />
+              </View>
+
+              <TouchableOpacity onPress={handleEmailLogin} disabled={loading} activeOpacity={0.85}>
+                <LinearGradient
+                  colors={[C.primary, C.primaryDark]}
+                  style={styles.enterButton}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.enterButtonText}>Entrar</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
 
-        <View style={styles.socialButtons}>
-          <TouchableOpacity style={styles.socialButton} onPress={handleGoogleLogin}>
-            <Ionicons name="logo-google" size={22} color={Colors.text} />
-            <Text style={styles.socialButtonText}>Google</Text>
-          </TouchableOpacity>
+        {/* Footer info */}
+        <View style={styles.footer}>
+          <View style={styles.ageRow}>
+            <Ionicons name="calendar-outline" size={13} color="#666" />
+            <Text style={styles.ageText}>Fecha de nacimiento – solo mayores de 18</Text>
+          </View>
 
-          <TouchableOpacity style={styles.socialButton} onPress={handleAppleLogin}>
-            <Ionicons name="logo-apple" size={22} color={Colors.text} />
-            <Text style={styles.socialButtonText}>Apple</Text>
-          </TouchableOpacity>
+          <Text style={styles.legalText}>
+            Al continuar aceptas los Términos y el Aviso de Privacidad (LFPDPPP). Tus gustos
+            musicales solo se comparten si tú lo activas.
+          </Text>
+
+          <Link href="/(auth)/register" asChild>
+            <TouchableOpacity style={styles.registerRow} activeOpacity={0.7}>
+              <Text style={styles.registerText}>
+                ¿No tienes cuenta?{' '}
+                <Text style={styles.registerLink}>Crear cuenta</Text>
+              </Text>
+            </TouchableOpacity>
+          </Link>
         </View>
-
-        <TouchableOpacity
-          style={[styles.socialButton, styles.spotifyButton]}
-          onPress={() => router.push('/(auth)/onboarding')}
-        >
-          <Ionicons name="musical-notes" size={22} color="#fff" />
-          <Text style={styles.socialButtonText}>Conectar con Spotify</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>¿No tienes cuenta? </Text>
-        <Link href="/(auth)/register" asChild>
-          <TouchableOpacity>
-            <Text style={styles.footerLink}>Crear cuenta</Text>
-          </TouchableOpacity>
-        </Link>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', paddingHorizontal: Spacing.lg },
-  header: { alignItems: 'center', marginBottom: Spacing.xxl },
-  logo: { fontSize: 42, fontWeight: '800', color: Colors.text, letterSpacing: -1 },
-  tagline: { fontSize: 15, color: Colors.textSecondary, marginTop: Spacing.xs },
+  container: {
+    flex: 1,
+    backgroundColor: C.background,
+  },
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: 28,
+    justifyContent: 'center',
+    paddingTop: 80,
+    paddingBottom: 40,
+  },
 
-  form: { gap: Spacing.md },
+  // Logo
+  logoSection: {
+    alignItems: 'center',
+    marginBottom: 52,
+  },
+  logo: {
+    fontSize: 52,
+    fontWeight: '800',
+    color: C.text,
+    letterSpacing: -2,
+  },
+  tagline: {
+    fontSize: 16,
+    color: C.textSecondary,
+    textAlign: 'center',
+    marginTop: 12,
+    lineHeight: 24,
+  },
+
+  // Buttons
+  buttons: {
+    gap: 12,
+  },
+  googleButton: {
+    height: 52,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  googleButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  appleButton: {
+    height: 52,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.borderLight,
+  },
+  appleButtonText: {
+    color: C.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emailToggle: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  emailToggleText: {
+    color: C.textSecondary,
+    fontSize: 15,
+  },
+
+  // Email form
+  emailForm: {
+    gap: 12,
+    marginTop: 4,
+  },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
+    backgroundColor: C.surface,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
+    borderColor: C.border,
+    paddingHorizontal: 14,
     height: 52,
   },
-  inputIcon: { marginRight: Spacing.sm },
-  input: { flex: 1, color: Colors.text, fontSize: 16 },
-
-  primaryButton: {
-    borderRadius: Radius.md,
+  inputIcon: {
+    marginRight: 10,
+  },
+  input: {
+    flex: 1,
+    color: C.text,
+    fontSize: 15,
+  },
+  enterButton: {
     height: 52,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  enterButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 
-  divider: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  dividerLine: { flex: 1, height: 1, backgroundColor: Colors.border },
-  dividerText: { color: Colors.textMuted, fontSize: 13 },
-
-  socialButtons: { flexDirection: 'row', gap: Spacing.sm },
-  socialButton: {
-    flex: 1,
+  // Footer
+  footer: {
+    marginTop: 40,
+    alignItems: 'center',
+    gap: 12,
+  },
+  ageRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.xs,
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    height: 48,
+    gap: 6,
   },
-  socialButtonText: { color: Colors.text, fontSize: 14, fontWeight: '600' },
-  spotifyButton: {
-    flex: 0,
-    backgroundColor: '#1A3A1F',
-    borderColor: Colors.spotify,
-    paddingHorizontal: Spacing.xl,
+  ageText: {
+    color: '#666',
+    fontSize: 12,
   },
-
-  footer: { flexDirection: 'row', justifyContent: 'center', marginTop: Spacing.xl },
-  footerText: { color: Colors.textSecondary, fontSize: 14 },
-  footerLink: { color: Colors.primary, fontSize: 14, fontWeight: '700' },
+  legalText: {
+    color: '#444',
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  registerRow: {
+    marginTop: 4,
+  },
+  registerText: {
+    color: C.textSecondary,
+    fontSize: 14,
+  },
+  registerLink: {
+    color: C.primary,
+    fontWeight: '700',
+  },
 });

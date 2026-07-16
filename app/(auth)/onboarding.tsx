@@ -2,197 +2,448 @@ import { useState } from 'react';
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
-  ActivityIndicator,
-  Alert,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSpotifyAuth } from '@/lib/spotify';
-import { useAuthStore } from '@/stores/authStore';
-import { supabase } from '@/lib/supabase';
-import { Colors, Spacing, Radius } from '@/constants/colors';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const GENRES = [
-  'Rock', 'Pop', 'Hip-Hop', 'Reggaeton', 'Electronic', 'Jazz',
-  'Metal', 'R&B', 'Latin', 'Indie', 'Classical', 'Cumbia',
-  'Trap', 'Banda', 'Salsa', 'K-Pop', 'Folk', 'Punk',
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const BG        = '#0D0D0D';
+const SURFACE   = '#1A1A1A';
+const PRIMARY   = '#A855F7';
+const TEXT      = '#FFFFFF';
+const TEXT_SEC  = '#A0A0A0';
+const TEXT_MUTED = '#666666';
+const BORDER    = '#2A2A2A';
+
+interface Artist {
+  name: string;
+  genre: string;
+  color: string;
+}
+
+const ARTISTS: Artist[] = [
+  { name: 'Peso Pluma',     genre: 'Corridos tumbados', color: '#A855F7' },
+  { name: 'Carin León',     genre: 'Regional mexicano', color: '#F43F5E' },
+  { name: 'Zoé',            genre: 'Rock en español',   color: '#84CC16' },
+  { name: 'The Warning',    genre: 'Rock',              color: '#F59E0B' },
+  { name: 'Arctic Monkeys', genre: 'Indie rock',        color: '#3B82F6' },
+  { name: 'Bad Bunny',      genre: 'Reggaetón / Trap',  color: '#EC4899' },
+  { name: 'Rosalía',        genre: 'Pop / Flamenco',    color: '#EF4444' },
+  { name: 'Caifanes',       genre: 'Rock en español',   color: '#8B5CF6' },
+  { name: 'Junior H',       genre: 'Corridos tumbados', color: '#10B981' },
+  { name: 'Natanael Cano',  genre: 'Corridos tumbados', color: '#F97316' },
+  { name: 'Tame Impala',    genre: 'Psychedelic pop',   color: '#06B6D4' },
+  { name: 'The Strokes',    genre: 'Indie rock',        color: '#6366F1' },
+  { name: 'Radiohead',      genre: 'Alternative',       color: '#64748B' },
+  { name: 'Kendrick Lamar', genre: 'Hip-hop',           color: '#EAB308' },
+  { name: 'Maná',           genre: 'Rock en español',   color: '#22C55E' },
+  { name: 'Café Tacvba',    genre: 'Rock alternativo',  color: '#FB923C' },
+  { name: 'Fuerza Regida',  genre: 'Corridos tumbados', color: '#A855F7' },
+  { name: 'Taylor Swift',   genre: 'Pop',               color: '#EC4899' },
+  { name: 'Drake',          genre: 'Hip-hop / R&B',     color: '#0EA5E9' },
+  { name: 'Beyoncé',        genre: 'Pop / R&B',         color: '#F59E0B' },
 ];
 
+// ─── Screen ───────────────────────────────────────────────────────────────────
+
 export default function OnboardingScreen() {
-  const [step, setStep] = useState(0);
-  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
-  const [connectingSpotify, setConnectingSpotify] = useState(false);
-  const { setSpotifyToken } = useAuthStore();
-  const { promptAsync } = useSpotifyAuth();
+  const [searchQuery, setSearchQuery]         = useState('');
+  const [selectedArtists, setSelectedArtists] = useState<Artist[]>([]);
 
-  const toggleGenre = (genre: string) => {
-    setSelectedGenres((prev) =>
-      prev.includes(genre) ? prev.filter((g) => g !== genre) : [...prev, genre].slice(0, 5),
+  // Filtered results — only shown when user has typed something
+  const filteredArtists = searchQuery.length > 0
+    ? ARTISTS.filter((a) =>
+        a.name.toLowerCase().includes(searchQuery.toLowerCase()),
+      )
+    : [];
+
+  const detectedGenres = Array.from(
+    new Set(selectedArtists.map((a) => a.genre)),
+  );
+
+  const isArtistSelected = (artist: Artist) =>
+    selectedArtists.some((a) => a.name === artist.name);
+
+  const addArtist = (artist: Artist) => {
+    if (isArtistSelected(artist) || selectedArtists.length >= 20) return;
+    setSelectedArtists((prev) => [...prev, artist]);
+  };
+
+  const removeArtist = (name: string) => {
+    setSelectedArtists((prev) => prev.filter((a) => a.name !== name));
+  };
+
+  const handleCreateProfile = async () => {
+    await AsyncStorage.setItem(
+      'onboarding_artists',
+      JSON.stringify(selectedArtists),
     );
-  };
-
-  const handleSpotifyConnect = async () => {
-    setConnectingSpotify(true);
-    try {
-      const result = await promptAsync();
-      if (result?.type === 'success') {
-        Alert.alert('¡Conectado!', 'Tu Spotify está vinculado a Sonet');
-        setStep(1);
-      }
-    } catch (e) {
-      Alert.alert('Error', 'No se pudo conectar con Spotify');
-    }
-    setConnectingSpotify(false);
-  };
-
-  const handleFinish = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase
-        .from('users')
-        .update({ onboarding_complete: true })
-        .eq('id', user.id);
-    }
     router.replace('/(tabs)');
   };
 
-  return (
-    <View style={styles.container}>
-      <LinearGradient colors={['#1A0A2E', '#0D0D0D']} style={StyleSheet.absoluteFill} />
+  const count   = selectedArtists.length;
+  const ready   = count >= 5;
 
-      {step === 0 && (
-        <View style={styles.step}>
-          <Text style={styles.emoji}>🎵</Text>
-          <Text style={styles.title}>Conecta tu música</Text>
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── Header ── */}
+          <View style={styles.headerRow}>
+            <Text style={styles.titleBold}>¿Qué escuchas?</Text>
+            <Text style={styles.titleAccent}> · elige 5+</Text>
+          </View>
           <Text style={styles.subtitle}>
-            Vincula Spotify para construir tu identidad musical automáticamente
+            Busca tus artistas favoritos para crear tu perfil musical
           </Text>
 
-          <TouchableOpacity
-            style={styles.spotifyButton}
-            onPress={handleSpotifyConnect}
-            disabled={connectingSpotify}
-            activeOpacity={0.8}
-          >
-            {connectingSpotify ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <Ionicons name="musical-notes" size={24} color="#fff" />
-                <Text style={styles.spotifyButtonText}>Conectar Spotify</Text>
-              </>
+          {/* ── Search ── */}
+          <View style={styles.searchBox}>
+            <Ionicons name="search" size={18} color={TEXT_MUTED} style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Busca artistas... prueba 'peso p'"
+              placeholderTextColor={TEXT_MUTED}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close-circle" size={18} color={TEXT_MUTED} />
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+          </View>
 
-          <TouchableOpacity onPress={() => setStep(1)} style={styles.skipButton}>
-            <Text style={styles.skipText}>Saltar por ahora</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+          {/* ── Search results ── */}
+          {filteredArtists.length > 0 && (
+            <View style={styles.resultsList}>
+              {filteredArtists.map((artist) => {
+                const selected = isArtistSelected(artist);
+                return (
+                  <TouchableOpacity
+                    key={artist.name}
+                    style={[styles.resultRow, selected && styles.resultRowSelected]}
+                    onPress={() => addArtist(artist)}
+                    activeOpacity={0.7}
+                  >
+                    {/* Colored avatar */}
+                    <View style={[styles.avatar, { backgroundColor: artist.color + '33' }]}>
+                      <Text style={[styles.avatarLetter, { color: artist.color }]}>
+                        {artist.name[0]}
+                      </Text>
+                    </View>
 
-      {step === 1 && (
-        <View style={styles.step}>
-          <Text style={styles.emoji}>🎸</Text>
-          <Text style={styles.title}>¿Qué géneros te mueven?</Text>
-          <Text style={styles.subtitle}>Elige hasta 5 para personalizar tu feed</Text>
+                    {/* Info */}
+                    <View style={styles.resultInfo}>
+                      <Text style={styles.resultName}>{artist.name}</Text>
+                      <Text style={styles.resultGenre}>{artist.genre}</Text>
+                    </View>
 
-          <ScrollView contentContainerStyle={styles.genreGrid} showsVerticalScrollIndicator={false}>
-            {GENRES.map((genre) => {
-              const selected = selectedGenres.includes(genre);
-              return (
-                <TouchableOpacity
-                  key={genre}
-                  style={[styles.genreChip, selected && styles.genreChipSelected]}
-                  onPress={() => toggleGenre(genre)}
-                  activeOpacity={0.7}
-                >
-                  {selected && <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={StyleSheet.absoluteFill} borderRadius={Radius.full} />}
-                  <Text style={[styles.genreText, selected && styles.genreTextSelected]}>
-                    {genre}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+                    {/* Add button */}
+                    <TouchableOpacity
+                      style={[styles.addBtn, selected && styles.addBtnSelected]}
+                      onPress={() => addArtist(artist)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Ionicons
+                        name={selected ? 'checkmark' : 'add'}
+                        size={18}
+                        color={selected ? PRIMARY : TEXT_SEC}
+                      />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
 
-          <TouchableOpacity activeOpacity={0.8} onPress={handleFinish}>
+          {/* ── Selected artists ── */}
+          {selectedArtists.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionLabel}>Tus artistas</Text>
+              <View style={styles.chipWrap}>
+                {selectedArtists.map((artist) => (
+                  <View key={artist.name} style={styles.selectedChip}>
+                    <Text style={styles.selectedChipText}>{artist.name}</Text>
+                    <TouchableOpacity
+                      onPress={() => removeArtist(artist.name)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Text style={styles.removeX}> ×</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* ── Detected genres ── */}
+          {detectedGenres.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionLabel}>Géneros detectados</Text>
+              <View style={styles.chipWrap}>
+                {detectedGenres.map((genre) => (
+                  <View key={genre} style={styles.genreChip}>
+                    <Text style={styles.genreChipText}>{genre}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* ── Progress ── */}
+          <Text style={[styles.progressText, ready && styles.progressTextReady]}>
+            {count} / 5 artistas seleccionados
+          </Text>
+
+          {/* ── CTA ── */}
+          <TouchableOpacity
+            onPress={handleCreateProfile}
+            disabled={!ready}
+            activeOpacity={0.85}
+            style={[styles.ctaWrapper, !ready && styles.ctaDisabled]}
+          >
             <LinearGradient
-              colors={[Colors.primary, Colors.primaryDark]}
-              style={styles.continueButton}
+              colors={['#A855F7', '#3B82F6']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
+              style={styles.ctaGradient}
             >
-              <Text style={styles.continueText}>Empezar a explorar 🚀</Text>
+              <Text style={styles.ctaText}>Crear mi perfil musical →</Text>
             </LinearGradient>
           </TouchableOpacity>
-        </View>
-      )}
-    </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  step: {
+  safeArea: {
     flex: 1,
-    paddingHorizontal: Spacing.lg,
-    paddingTop: 80,
-    paddingBottom: 40,
-    alignItems: 'center',
+    backgroundColor: BG,
   },
-  emoji: { fontSize: 64, marginBottom: Spacing.lg },
-  title: { fontSize: 28, fontWeight: '800', color: Colors.text, textAlign: 'center' },
-  subtitle: {
-    fontSize: 15,
-    color: Colors.textSecondary,
-    textAlign: 'center',
-    marginTop: Spacing.sm,
-    marginBottom: Spacing.xl,
-    lineHeight: 22,
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 32,
+    paddingBottom: 48,
   },
 
-  spotifyButton: {
+  // Header
+  headerRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.spotify,
-    borderRadius: Radius.md,
-    paddingVertical: 16,
-    paddingHorizontal: Spacing.xxl,
-  },
-  spotifyButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  skipButton: { marginTop: Spacing.lg },
-  skipText: { color: Colors.textMuted, fontSize: 14 },
-
-  genreGrid: {
-    flexDirection: 'row',
+    alignItems: 'baseline',
     flexWrap: 'wrap',
-    gap: Spacing.sm,
-    justifyContent: 'center',
-    paddingVertical: Spacing.md,
-    width: '100%',
+    marginBottom: 8,
   },
-  genreChip: {
-    borderRadius: Radius.full,
-    paddingVertical: 10,
-    paddingHorizontal: Spacing.lg,
+  titleBold: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: TEXT,
+  },
+  titleAccent: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: PRIMARY,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: TEXT_SEC,
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+
+  // Search
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: SURFACE,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: BORDER,
+    borderRadius: 12,
+    height: 48,
+    paddingHorizontal: 12,
+    marginBottom: 4,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    color: TEXT,
+    fontSize: 15,
+    height: '100%',
+  },
+
+  // Results list
+  resultsList: {
+    backgroundColor: SURFACE,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 12,
+    marginTop: 4,
+    marginBottom: 8,
     overflow: 'hidden',
   },
-  genreChipSelected: { borderColor: Colors.primary },
-  genreText: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600' },
-  genreTextSelected: { color: Colors.text },
-
-  continueButton: {
-    borderRadius: Radius.md,
-    paddingVertical: 16,
-    paddingHorizontal: Spacing.xxl,
-    marginTop: Spacing.xl,
+  resultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
   },
-  continueText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  resultRowSelected: {
+    backgroundColor: PRIMARY + '10',
+  },
+  avatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  avatarLetter: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  resultInfo: {
+    flex: 1,
+  },
+  resultName: {
+    color: TEXT,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  resultGenre: {
+    color: TEXT_MUTED,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  addBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: BORDER,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addBtnSelected: {
+    backgroundColor: PRIMARY + '20',
+  },
+
+  // Sections
+  section: {
+    marginTop: 20,
+  },
+  sectionLabel: {
+    color: TEXT_SEC,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 10,
+  },
+  chipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+
+  // Selected artist chips
+  selectedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1A0A2E',
+    borderWidth: 1,
+    borderColor: PRIMARY,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  selectedChipText: {
+    color: PRIMARY,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  removeX: {
+    color: PRIMARY,
+    fontSize: 16,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+
+  // Genre chips (non-interactive)
+  genreChip: {
+    backgroundColor: SURFACE,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  genreChipText: {
+    color: TEXT_SEC,
+    fontSize: 13,
+  },
+
+  // Progress
+  progressText: {
+    marginTop: 20,
+    color: TEXT_MUTED,
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  progressTextReady: {
+    color: PRIMARY,
+    fontWeight: '700',
+  },
+
+  // CTA
+  ctaWrapper: {
+    marginTop: 24,
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  ctaDisabled: {
+    opacity: 0.4,
+  },
+  ctaGradient: {
+    height: 54,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+  },
+  ctaText: {
+    color: TEXT,
+    fontSize: 16,
+    fontWeight: '700',
+  },
 });

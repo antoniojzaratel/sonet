@@ -153,7 +153,6 @@ function OptionCard({ option, side, onPress, selected, choice }: any) {
         <LinearGradient
           colors={[Colors.primary, Colors.primaryDark]}
           style={StyleSheet.absoluteFill}
-          borderRadius={Radius.xl}
         />
       )}
       <Text style={styles.optionEmoji}>{option.emoji}</Text>

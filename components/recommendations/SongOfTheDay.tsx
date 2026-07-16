@@ -86,7 +86,6 @@ export function SongOfTheDay() {
         <LinearGradient
           colors={['#1A0A3E', '#0D1A3E']}
           style={StyleSheet.absoluteFill}
-          borderRadius={Radius.xl}
         />
 
         <View style={styles.cardInner}>

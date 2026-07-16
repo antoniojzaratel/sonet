@@ -53,7 +53,7 @@ export function RateModal({ visible, onClose }: Props) {
     try {
       if (spotifyToken) {
         const type = contentType === 'song' || contentType === 'single' ? 'track' : contentType === 'album' ? 'album' : 'track';
-        const data = await searchSpotify(spotifyToken, query, type, 8);
+        const data = await searchSpotify(spotifyToken, query, [type], 8);
         const items = data?.tracks?.items || data?.albums?.items || [];
         setResults(items);
       } else {

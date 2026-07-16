@@ -76,7 +76,7 @@ export async function searchMusic(opts: SearchOptions): Promise<MusicItem[]> {
 
 async function searchSpotifyTracks(q: string, token: string, limit: number): Promise<MusicItem[]> {
   try {
-    const data = await searchSpotify(token, q, 'track', limit);
+    const data = await searchSpotify(token, q, ['track'], limit);
     return (data?.tracks?.items ?? []).map((t: any) => ({
       id: t.id,
       type: 'song' as ContentType,
@@ -98,7 +98,7 @@ async function searchSpotifyTracks(q: string, token: string, limit: number): Pro
 
 async function searchSpotifyAlbums(q: string, token: string, limit: number): Promise<MusicItem[]> {
   try {
-    const data = await searchSpotify(token, q, 'album', limit);
+    const data = await searchSpotify(token, q, ['album'], limit);
     return (data?.albums?.items ?? []).map((a: any) => ({
       id: a.id,
       type: 'album' as ContentType,

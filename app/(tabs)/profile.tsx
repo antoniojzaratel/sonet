@@ -1,72 +1,158 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { VictoryPie } from 'victory-native';
+import { Colors } from '@/constants/colors';
+import { useAuthStore } from '@/stores/authStore';
+import { useMusicStore } from '@/stores/musicStore';
+import {
+  fetchTopArtists,
+  extractGenresFromArtists,
+  mapGenresToCategories,
+  type GenreCategoryItem,
+} from '@/lib/spotify';
+import type { Rating } from '@/types';
 
-const Colors = {
-  background: '#0D0D0D',
-  surface: '#1A1A1A',
-  surfaceElevated: '#242424',
-  primary: '#A855F7',
-  primaryDark: '#7C3AED',
-  secondary: '#84CC16',
-  accent: '#F43F5E',
-  text: '#FFFFFF',
-  textSecondary: '#A0A0A0',
-  textMuted: '#666666',
-  border: '#2A2A2A',
-  amber: '#F59E0B',
-};
+const ARTIST_COLORS = [Colors.primary, Colors.accent, Colors.secondary, Colors.warning, '#3B82F6'];
 
-const GENRE_DATA = [
-  { x: 'Corridos', y: 38, color: '#A855F7' },
-  { x: 'Rock esp.', y: 25, color: '#F43F5E' },
-  { x: 'Indie', y: 19, color: '#84CC16' },
-  { x: 'Otros', y: 18, color: '#666666' },
+const PLACEHOLDER_GENRES: GenreCategoryItem[] = [
+  { label: 'Género A', value: 35, color: '#333333' },
+  { label: 'Género B', value: 28, color: '#2A2A2A' },
+  { label: 'Género C', value: 22, color: '#222222' },
+  { label: 'Otros',    value: 15, color: '#1A1A1A' },
 ];
 
-const TOP_ARTISTS = [
-  { rank: '01', name: 'Peso Pluma', initials: 'PP', color: '#A855F7', change: '↑ subió 2 lugares' },
-  { rank: '02', name: 'Carin León', initials: 'CL', color: '#F43F5E', change: '→ se mantiene' },
-  { rank: '03', name: 'Zoé', initials: 'Z', color: '#84CC16', change: '↑ nuevo en tu top 3' },
-];
+function getMonthYearLabel(): string {
+  const now = new Date();
+  return now.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).toUpperCase();
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .slice(0, 2)
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase();
+}
+
+function getHandle(name: string): string {
+  const first = name.split(' ')[0].toLowerCase();
+  return `${first}_mty`;
+}
+
+function getRatingStats(ratings: Rating[]) {
+  const total = ratings.length;
+  const avgScore = total > 0 ? ratings.reduce((s, r) => s + r.score, 0) / total : 0;
+  const loveCount = ratings.filter((r) => r.score >= 8).length;
+  return { total, avgScore, loveCount };
+}
+
+function getTopRated(ratings: Rating[], n: number): Rating[] {
+  return [...ratings].sort((a, b) => b.score - a.score).slice(0, n);
+}
 
 export default function ProfileScreen() {
   const [humourSeed, setHumourSeed] = useState(0);
+  const [topArtists, setTopArtists] = useState<any[]>([]);
+  const [genreData, setGenreData] = useState<GenreCategoryItem[]>([]);
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  const { user, spotifyToken } = useAuthStore();
+  const { myRatings, fetchMyRatings } = useMusicStore();
+
+  useEffect(() => {
+    if (user?.id) {
+      fetchMyRatings(user.id);
+    }
+
+    if (spotifyToken) {
+      fetchTopArtists(spotifyToken, 'medium_term', 20).then((data) => {
+        if (data?.items) {
+          setTopArtists(data.items.slice(0, 3));
+          const genreMap = extractGenresFromArtists(data.items);
+          const mapped = mapGenresToCategories(genreMap);
+          if (mapped.length > 0) setGenreData(mapped);
+        }
+      });
+    }
+
+    setDataLoaded(true);
+  }, [spotifyToken, user?.id]);
+
+  const displayName = user?.display_name ?? 'Tu perfil';
+  const initials = getInitials(displayName);
+  const handle = user?.display_name ? getHandle(user.display_name) : 'usuario';
+  const stats = getRatingStats(myRatings);
+  const topRated = getTopRated(myRatings, 5);
+  const hasSpotify = !!spotifyToken;
+  const activeGenreData = genreData.length > 0 ? genreData : PLACEHOLDER_GENRES;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false}>
+
         {/* Header row */}
         <View style={styles.headerRow}>
           <Text style={styles.headerLogo}>Sonet</Text>
-          <Text style={styles.headerMeta}>JUNIO 2026  /  compartir</Text>
+          <Text style={styles.headerMeta}>
+            {getMonthYearLabel()}  /{'  '}
+            <Text style={styles.headerShare}>compartir</Text>
+          </Text>
         </View>
 
         {/* User card */}
         <View style={styles.card}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitials}>AV</Text>
+          {user?.avatar_url ? (
+            <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
+          ) : (
+            <View style={styles.avatarCircle}>
+              <Text style={styles.avatarInitials}>{initials}</Text>
+            </View>
+          )}
+          <Text style={styles.userName}>{displayName}</Text>
+          <Text style={styles.userHandle}>@{handle}</Text>
+          <Text style={styles.userStats}>
+            {stats.total} ratings · {stats.avgScore.toFixed(1)} promedio
+          </Text>
+        </View>
+
+        {/* Stats row */}
+        <View style={styles.statsRow}>
+          <View style={styles.statBox}>
+            <Text style={styles.statNumber}>{stats.total}</Text>
+            <Text style={styles.statLabel}>calificaciones</Text>
           </View>
-          <Text style={styles.userName}>Andrea Villarreal</Text>
-          <Text style={styles.userHandle}>@andie_mty · Monterrey</Text>
-          <Text style={styles.userStats}>128 siguiendo  ·  96 seguidores  ·  14 eventos</Text>
+          <View style={[styles.statBox, styles.statBoxMid]}>
+            <Text style={styles.statNumber}>{stats.loveCount}</Text>
+            <Text style={styles.statLabel}>me encantó</Text>
+          </View>
+          <View style={styles.statBox}>
+            <Text style={styles.statNumber}>{stats.avgScore.toFixed(1)}</Text>
+            <Text style={styles.statLabel}>promedio</Text>
+          </View>
         </View>
 
         {/* Genre distribution card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Tu distribución de géneros</Text>
+          {!hasSpotify && genreData.length === 0 && (
+            <Text style={styles.connectHint}>Conecta Spotify para ver tus géneros reales</Text>
+          )}
           <View style={styles.genreRow}>
             <VictoryPie
-              data={GENRE_DATA}
-              colorScale={GENRE_DATA.map((d) => d.color)}
+              data={activeGenreData}
+              x="label"
+              y="value"
+              colorScale={activeGenreData.map((d) => d.color)}
               innerRadius={45}
               width={140}
               height={140}
@@ -74,10 +160,12 @@ export default function ProfileScreen() {
               labels={() => ''}
             />
             <View style={styles.legendCol}>
-              {GENRE_DATA.map((item) => (
-                <View key={item.x} style={styles.legendItem}>
+              {activeGenreData.map((item) => (
+                <View key={item.label} style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-                  <Text style={styles.legendText}>{item.y}% {item.x}</Text>
+                  <Text style={styles.legendText}>
+                    {item.value}% {item.label}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -87,18 +175,69 @@ export default function ProfileScreen() {
         {/* Top artists card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Top artistas del mes</Text>
-          {TOP_ARTISTS.map((artist) => (
-            <View key={artist.rank} style={styles.artistRow}>
-              <Text style={styles.artistRank}>{artist.rank}</Text>
-              <View style={[styles.artistAvatar, { backgroundColor: artist.color }]}>
-                <Text style={styles.artistInitials}>{artist.initials}</Text>
-              </View>
-              <Text style={styles.artistName}>{artist.name}</Text>
-              <View style={styles.changeBadge}>
-                <Text style={styles.changeBadgeText}>{artist.change}</Text>
-              </View>
+          {!hasSpotify ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="musical-notes-outline" size={32} color={Colors.textMuted} />
+              <Text style={styles.emptyText}>Conecta Spotify para ver tus artistas más escuchados</Text>
             </View>
-          ))}
+          ) : topArtists.length === 0 && dataLoaded ? (
+            <Text style={styles.emptyText}>No encontramos artistas. Escucha más música 🎵</Text>
+          ) : (
+            topArtists.map((artist, idx) => {
+              const rank = String(idx + 1).padStart(2, '0');
+              const color = ARTIST_COLORS[idx % ARTIST_COLORS.length];
+              const imageUrl = artist.images?.[0]?.url;
+              return (
+                <View key={artist.id} style={styles.artistRow}>
+                  <Text style={styles.artistRank}>{rank}</Text>
+                  {imageUrl ? (
+                    <Image source={{ uri: imageUrl }} style={styles.artistAvatar} />
+                  ) : (
+                    <View style={[styles.artistAvatarFallback, { backgroundColor: color }]}>
+                      <Text style={styles.artistInitials}>{artist.name[0]}</Text>
+                    </View>
+                  )}
+                  <Text style={styles.artistName} numberOfLines={1}>{artist.name}</Text>
+                  <View style={[styles.changeBadge, { borderColor: color }]}>
+                    <Text style={[styles.changeBadgeText, { color }]}>↑</Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </View>
+
+        {/* Top ratings */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Tus mejores calificaciones</Text>
+          {topRated.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="star-outline" size={28} color={Colors.textMuted} />
+              <Text style={styles.emptyText}>
+                Aún no has calificado nada · ve al Diario para empezar
+              </Text>
+            </View>
+          ) : (
+            topRated.map((rating, idx) => {
+              const color = ARTIST_COLORS[idx % ARTIST_COLORS.length];
+              return (
+                <View key={rating.id} style={styles.ratingRow}>
+                  <View style={[styles.ratingInitial, { backgroundColor: color }]}>
+                    <Text style={styles.ratingInitialText}>
+                      {rating.content_name[0]?.toUpperCase() ?? '?'}
+                    </Text>
+                  </View>
+                  <View style={styles.ratingInfo}>
+                    <Text style={styles.ratingTitle} numberOfLines={1}>{rating.content_name}</Text>
+                    <Text style={styles.ratingArtist} numberOfLines={1}>{rating.artist_name}</Text>
+                  </View>
+                  <View style={[styles.scoreBadge, { backgroundColor: color + '22', borderColor: color }]}>
+                    <Text style={[styles.scoreText, { color }]}>{rating.score.toFixed(1)}</Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
         </View>
 
         {/* AI humor reading card */}
@@ -106,13 +245,17 @@ export default function ProfileScreen() {
           <Text style={styles.cardTitle}>Tu sentido del humor 🤖</Text>
           <Text style={styles.aiLabel}>Humor norteño-existencial</Text>
           <Text style={styles.aiBody}>
-            Te ríes con memes de corridos a mediodía y lloras con Zoé a las 2 am. Tu chiste favorito es negar que existe tu playlist "para llorar"... que tiene 84 canciones.
+            Te ríes con memes de corridos a mediodía y lloras con Zoé a las 2 am. Tu chiste favorito
+            es negar que existe tu playlist "para llorar"... que tiene 84 canciones.
           </Text>
           <View style={styles.aiButtons}>
             <TouchableOpacity style={styles.aiButtonOutlined}>
               <Text style={styles.aiButtonOutlinedText}>Compartir</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.aiButtonFilled} onPress={() => setHumourSeed((s) => s + 1)}>
+            <TouchableOpacity
+              style={styles.aiButtonFilled}
+              onPress={() => setHumourSeed((s) => s + 1)}
+            >
               <Text style={styles.aiButtonFilledText}>Otra lectura</Text>
             </TouchableOpacity>
           </View>
@@ -142,8 +285,8 @@ export default function ProfileScreen() {
           </TouchableOpacity>
           <TouchableOpacity style={styles.privacyRow}>
             <Ionicons name="notifications-outline" size={18} color={Colors.textSecondary} />
-            <Text style={[styles.privacyText, { color: Colors.textSecondary, flex: 1 }]} numberOfLines={1}>
-              Feed: Mariana va a Zoé · Diego sigue a Caifanes
+            <Text style={[styles.privacyText, { flex: 1 }]} numberOfLines={1}>
+              Notificaciones de actividad social
             </Text>
             <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
           </TouchableOpacity>
@@ -176,9 +319,12 @@ const styles = StyleSheet.create({
   },
   headerMeta: {
     fontSize: 11,
-    color: Colors.amber,
+    color: Colors.warning,
     fontWeight: '600',
     letterSpacing: 0.5,
+  },
+  headerShare: {
+    color: Colors.warning,
   },
 
   /* Cards */
@@ -197,6 +343,12 @@ const styles = StyleSheet.create({
   },
 
   /* User card */
+  avatarImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    marginBottom: 12,
+  },
   avatarCircle: {
     width: 64,
     height: 64,
@@ -227,6 +379,37 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
 
+  /* Stats row */
+  statsRow: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  statBox: {
+    flex: 1,
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  statBoxMid: {
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: Colors.border,
+  },
+  statNumber: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
+
   /* Genre distribution */
   genreRow: {
     flexDirection: 'row',
@@ -248,8 +431,15 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   legendText: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textSecondary,
+    flexShrink: 1,
+  },
+  connectHint: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginBottom: 12,
+    fontStyle: 'italic',
   },
 
   /* Top artists */
@@ -269,11 +459,16 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
+  },
+  artistAvatarFallback: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
   },
   artistInitials: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#fff',
   },
@@ -284,16 +479,70 @@ const styles = StyleSheet.create({
     color: Colors.text,
   },
   changeBadge: {
-    backgroundColor: '#1A1A1A',
     borderWidth: 1,
-    borderColor: '#333',
     borderRadius: 99,
     paddingVertical: 3,
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
   },
   changeBadgeText: {
-    fontSize: 11,
-    color: Colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  /* Ratings list */
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 8,
+  },
+  ratingInitial: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ratingInitialText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  ratingInfo: {
+    flex: 1,
+  },
+  ratingTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  ratingArtist: {
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  scoreBadge: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  scoreText: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  /* Empty state */
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 10,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 19,
   },
 
   /* AI card */
@@ -358,7 +607,7 @@ const styles = StyleSheet.create({
   premiumCard: {
     backgroundColor: '#1C1200',
     borderWidth: 1,
-    borderColor: Colors.amber,
+    borderColor: Colors.warning,
     borderRadius: 16,
     padding: 20,
     marginHorizontal: 16,
@@ -367,7 +616,7 @@ const styles = StyleSheet.create({
   premiumTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: Colors.amber,
+    color: Colors.warning,
     marginBottom: 8,
   },
   premiumDesc: {

@@ -1,6 +1,9 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
+import { useAuthStore } from '@/stores/authStore';
+import { fetchTopArtists, extractGenresFromArtists } from '@/lib/spotify';
 
 function Ring({ score, size = 64 }: { score: number; size?: number }) {
   const r = (size - 10) / 2;
@@ -27,16 +30,63 @@ function Ring({ score, size = 64 }: { score: number; size?: number }) {
   );
 }
 
-const FRIENDS: { score: number; name: string; subtitle: string }[] = [
-  { score: 91, name: 'Mariana G.', subtitle: '7 artistas en común · ya se siguen' },
+// Demo friends with their taste profiles
+const DEMO_FRIENDS = [
+  {
+    name: 'Mariana G.',
+    score: null as number | null,
+    genres: ['corrido', 'rock en español', 'indie'],
+    artists: ['Zoé', 'Carin León', 'The Warning'],
+    tags: 'Zoé · Carin León · indie',
+    subtitle: '7 artistas en común · ya se siguen',
+  },
+  {
+    name: 'Diego R.',
+    score: null as number | null,
+    genres: ['corrido', 'banda', 'norteno'],
+    artists: ['Peso Pluma', 'Caifanes', 'Fuerza Regida'],
+    tags: 'Peso Pluma · Caifanes · corridos',
+    subtitle: null,
+  },
+  {
+    name: 'Sofía T.',
+    score: null as number | null,
+    genres: ['rock en español', 'indie', 'alternative'],
+    artists: ['Maná', 'Arctic Monkeys', 'Radiohead'],
+    tags: 'Rock en español · 4 artistas',
+    subtitle: null,
+  },
 ];
 
-const NEW_PEOPLE: { score: number; name: string; tags: string }[] = [
-  { score: 84, name: 'Diego R.', tags: 'Zoé · Caifanes · indie rock' },
-  { score: 72, name: 'Sofía T.', tags: 'Rock en español · 4 artistas' },
-];
+const FALLBACK_SCORES: Record<string, number> = {
+  'Mariana G.': 91,
+  'Diego R.': 84,
+  'Sofía T.': 72,
+};
 
 export default function DiscoverScreen() {
+  const { spotifyToken } = useAuthStore();
+  const [friends, setFriends] = useState(DEMO_FRIENDS);
+
+  useEffect(() => {
+    if (!spotifyToken) return;
+    fetchTopArtists(spotifyToken, 'medium_term', 20).then((data) => {
+      if (!data?.items) return;
+      const userGenres = Object.keys(extractGenresFromArtists(data.items)).slice(0, 10);
+      const updated = DEMO_FRIENDS.map((friend) => {
+        const overlap = friend.genres.filter((g) =>
+          userGenres.some((ug) => ug.includes(g) || g.includes(ug)),
+        ).length;
+        const score = Math.min(98, 55 + overlap * 15 + Math.floor(Math.random() * 10));
+        return { ...friend, score };
+      });
+      setFriends(updated);
+    });
+  }, [spotifyToken]);
+
+  const mariana = friends[0];
+  const newPeople = friends.slice(1);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
@@ -44,31 +94,47 @@ export default function DiscoverScreen() {
 
         {/* Amigos que van */}
         <Text style={styles.sectionTitle}>AMIGOS QUE VAN</Text>
-        {FRIENDS.map((f) => (
-          <View key={f.name} style={styles.card}>
-            <Ring score={f.score} size={72} />
-            <View style={styles.cardInfo}>
-              <Text style={styles.cardName}>{f.name}</Text>
-              <Text style={styles.cardSub}>{f.subtitle}</Text>
-            </View>
-            <TouchableOpacity style={styles.btnOutlined} activeOpacity={0.7}>
-              <Text style={styles.btnOutlinedText}>Ir juntos</Text>
-            </TouchableOpacity>
+        <View style={styles.card}>
+          <Ring score={mariana.score ?? FALLBACK_SCORES[mariana.name]} size={72} />
+          <View style={styles.cardInfo}>
+            <Text style={styles.cardName}>{mariana.name}</Text>
+            <Text style={styles.cardSub}>{mariana.subtitle ?? mariana.tags}</Text>
           </View>
-        ))}
+          <TouchableOpacity
+            style={styles.btnOutlined}
+            activeOpacity={0.7}
+            onPress={() =>
+              Alert.alert(
+                '¡Genial!',
+                'Le avisaremos a Mariana que quieres ir juntos al evento',
+              )
+            }
+          >
+            <Text style={styles.btnOutlinedText}>Ir juntos</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Gente nueva compatible */}
         <View style={styles.sectionRow}>
           <Text style={styles.sectionTitle}>GENTE NUEVA COMPATIBLE</Text>
         </View>
-        {NEW_PEOPLE.map((p) => (
+        {newPeople.map((p) => (
           <View key={p.name} style={styles.card}>
-            <Ring score={p.score} size={72} />
+            <Ring score={p.score ?? FALLBACK_SCORES[p.name]} size={72} />
             <View style={styles.cardInfo}>
               <Text style={styles.cardName}>{p.name}</Text>
               <Text style={styles.cardSub}>{p.tags}</Text>
             </View>
-            <TouchableOpacity style={styles.btnFilled} activeOpacity={0.7}>
+            <TouchableOpacity
+              style={styles.btnFilled}
+              activeOpacity={0.7}
+              onPress={() =>
+                Alert.alert(
+                  '¡Solicitud enviada!',
+                  `${p.name.split(' ')[0]} recibirá tu solicitud de conexión`,
+                )
+              }
+            >
               <Text style={styles.btnFilledText}>Conectar</Text>
             </TouchableOpacity>
           </View>

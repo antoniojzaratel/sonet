@@ -26,7 +26,8 @@ export function MusicDashboard({ userId, ratings }: Props) {
     if (!spotifyToken) return;
     setLoadingSpotify(true);
     try {
-      const { items } = await fetchTopArtists(spotifyToken, 'medium_term', 30);
+      const result = await fetchTopArtists(spotifyToken, 'medium_term', 30);
+      const items = result?.items ?? [];
       const genreCount = extractGenresFromArtists(items);
       const sorted = Object.entries(genreCount)
         .sort(([, a], [, b]) => b - a)

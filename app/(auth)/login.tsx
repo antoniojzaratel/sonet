@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,23 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as AuthSession from 'expo-auth-session';
+import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '@/lib/supabase';
+import { exchangeCodeForToken, getRedirectUri } from '@/lib/spotify';
+import { useAuthStore } from '@/stores/authStore';
 import { isDemoMode } from '@/hooks/useAuth';
+
+WebBrowser.maybeCompleteAuthSession();
+
+const CLIENT_ID = process.env.EXPO_PUBLIC_SPOTIFY_CLIENT_ID ?? '';
+const SCOPES = [
+  'user-read-private',
+  'user-read-email',
+  'user-top-read',
+  'user-read-recently-played',
+  'user-library-read',
+];
 
 const C = {
   primary: '#A855F7',
@@ -26,6 +41,8 @@ const C = {
   textSecondary: '#A0A0A0',
   border: '#2A2A2A',
   borderLight: '#333333',
+  spotify: '#1DB954',
+  spotifyDark: '#158a3e',
 };
 
 export default function LoginScreen() {
@@ -34,16 +51,49 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [showEmailForm, setShowEmailForm] = useState(false);
 
-  const handleEmailLogin = async () => {
-    if (isDemoMode) { router.replace('/(tabs)'); return; }
-    if (!email || !password) {
-      Alert.alert('Error', 'Ingresa tu email y contraseña');
+  const { setSpotifyToken, setSpotifyRefreshToken } = useAuthStore();
+
+  const [request, response, promptAsync] = AuthSession.useAuthRequest(
+    {
+      clientId: CLIENT_ID,
+      scopes: SCOPES,
+      usePKCE: true,
+      redirectUri: getRedirectUri(),
+    },
+    { authorizationEndpoint: 'https://accounts.spotify.com/authorize' },
+  );
+
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { code } = response.params;
+      const codeVerifier = request?.codeVerifier ?? '';
+      setLoading(true);
+      exchangeCodeForToken(code, codeVerifier).then((tokens) => {
+        if (tokens) {
+          setSpotifyToken(tokens.accessToken);
+          setSpotifyRefreshToken(tokens.refreshToken);
+          router.replace('/(auth)/onboarding');
+        } else {
+          Alert.alert('Error', 'No se pudo conectar con Spotify');
+        }
+        setLoading(false);
+      });
+    }
+  }, [response]);
+
+  const handleSpotifyLogin = async () => {
+    if (!CLIENT_ID) {
+      if (isDemoMode) {
+        router.replace('/(tabs)');
+      } else {
+        Alert.alert(
+          'Configuración requerida',
+          'Configura EXPO_PUBLIC_SPOTIFY_CLIENT_ID en .env.local',
+        );
+      }
       return;
     }
-    setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) Alert.alert('Error', error.message);
-    setLoading(false);
+    promptAsync();
   };
 
   const handleGoogleLogin = async () => {
@@ -56,6 +106,18 @@ export default function LoginScreen() {
     if (isDemoMode) { router.replace('/(tabs)'); return; }
     const { error } = await supabase.auth.signInWithOAuth({ provider: 'apple' });
     if (error) Alert.alert('Error', error.message);
+  };
+
+  const handleEmailLogin = async () => {
+    if (isDemoMode) { router.replace('/(tabs)'); return; }
+    if (!email || !password) {
+      Alert.alert('Error', 'Ingresa tu email y contraseña');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) Alert.alert('Error', error.message);
+    setLoading(false);
   };
 
   return (
@@ -85,6 +147,29 @@ export default function LoginScreen() {
 
         {/* Buttons */}
         <View style={styles.buttons}>
+          {/* Spotify — primary */}
+          <TouchableOpacity
+            onPress={handleSpotifyLogin}
+            disabled={loading || !request}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={[C.spotify, C.spotifyDark]}
+              style={styles.spotifyButton}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              {loading ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Ionicons name="musical-notes" size={20} color="#fff" />
+                  <Text style={styles.spotifyButtonText}>Continuar con Spotify</Text>
+                </>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
+
           {/* Google */}
           <TouchableOpacity onPress={handleGoogleLogin} activeOpacity={0.85}>
             <LinearGradient
@@ -225,6 +310,19 @@ const styles = StyleSheet.create({
   // Buttons
   buttons: {
     gap: 12,
+  },
+  spotifyButton: {
+    height: 52,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  spotifyButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
   },
   googleButton: {
     height: 52,

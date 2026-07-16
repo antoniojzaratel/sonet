@@ -15,6 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Link, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
+import { isDemoMode } from '@/hooks/useAuth';
 
 const C = {
   primary: '#A855F7',
@@ -34,6 +35,7 @@ export default function LoginScreen() {
   const [showEmailForm, setShowEmailForm] = useState(false);
 
   const handleEmailLogin = async () => {
+    if (isDemoMode) { router.replace('/(tabs)'); return; }
     if (!email || !password) {
       Alert.alert('Error', 'Ingresa tu email y contraseña');
       return;
@@ -45,11 +47,13 @@ export default function LoginScreen() {
   };
 
   const handleGoogleLogin = async () => {
+    if (isDemoMode) { router.replace('/(tabs)'); return; }
     const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
     if (error) Alert.alert('Error', error.message);
   };
 
   const handleAppleLogin = async () => {
+    if (isDemoMode) { router.replace('/(tabs)'); return; }
     const { error } = await supabase.auth.signInWithOAuth({ provider: 'apple' });
     if (error) Alert.alert('Error', error.message);
   };

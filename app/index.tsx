@@ -1,11 +1,10 @@
 import { Redirect } from 'expo-router';
-import { useAuth, isDemoMode } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuth';
 
 export default function Index() {
-  const { isAuthenticated, loading } = useAuth();
+  const { loading } = useAuth();
 
-  if (isDemoMode) return <Redirect href="/(tabs)" />;
   if (loading) return null;
 
-  return <Redirect href={isAuthenticated ? '/(tabs)' : '/(auth)/login'} />;
+  return <Redirect href="/(auth)/login" />;
 }

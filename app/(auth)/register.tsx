@@ -11,26 +11,72 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
-import { Colors, Spacing, Radius } from '@/constants/colors';
+import { isDemoMode } from '@/hooks/useAuth';
+
+const C = {
+  background: '#0D0D0D',
+  surface: '#1A1A1A',
+  primary: '#A855F7',
+  text: '#FFFFFF',
+  textSecondary: '#A0A0A0',
+  border: '#2A2A2A',
+};
+
+interface FieldProps {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  placeholder: string;
+  value: string;
+  onChangeText: (text: string) => void;
+  keyboardType?: React.ComponentProps<typeof TextInput>['keyboardType'];
+  autoCapitalize?: React.ComponentProps<typeof TextInput>['autoCapitalize'];
+  secureTextEntry?: boolean;
+}
+
+function Field({ icon, placeholder, value, onChangeText, keyboardType, autoCapitalize, secureTextEntry }: FieldProps) {
+  return (
+    <View style={styles.inputWrapper}>
+      <Ionicons name={icon} size={18} color={C.textSecondary} style={styles.inputIcon} />
+      <TextInput
+        style={styles.input}
+        placeholder={placeholder}
+        placeholderTextColor={C.textSecondary}
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize ?? 'sentences'}
+        autoCorrect={false}
+        secureTextEntry={secureTextEntry}
+      />
+    </View>
+  );
+}
 
 export default function RegisterScreen() {
-  const [displayName, setDisplayName] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!displayName || !username || !email || !password) {
+    if (isDemoMode) {
+      router.replace('/(auth)/onboarding');
+      return;
+    }
+
+    if (!username || !email || !password || !confirmPassword) {
       Alert.alert('Error', 'Completa todos los campos');
       return;
     }
     if (password.length < 6) {
       Alert.alert('Error', 'La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Error', 'Las contraseñas no coinciden');
       return;
     }
 
@@ -44,10 +90,11 @@ export default function RegisterScreen() {
     }
 
     if (data.user) {
+      const cleanUsername = username.toLowerCase().replace(/[^a-z0-9_]/g, '');
       const { error: profileError } = await supabase.from('users').insert({
         id: data.user.id,
-        display_name: displayName,
-        username: username.toLowerCase().replace(/[^a-z0-9_]/g, ''),
+        display_name: username,
+        username: cleanUsername,
         followers_count: 0,
         following_count: 0,
         ratings_count: 0,
@@ -65,41 +112,34 @@ export default function RegisterScreen() {
 
   return (
     <KeyboardAvoidingView
-      style={{ flex: 1 }}
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <LinearGradient colors={['#1A0A2E', '#0D0D0D']} style={StyleSheet.absoluteFill} />
-
       <ScrollView
-        contentContainerStyle={styles.container}
+        contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={Colors.text} />
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={24} color={C.text} />
         </TouchableOpacity>
 
         <View style={styles.header}>
           <Text style={styles.title}>Crea tu cuenta</Text>
-          <Text style={styles.subtitle}>Únete a la comunidad musical</Text>
+          <Text style={styles.subtitle}>Unete a la comunidad musical</Text>
         </View>
 
         <View style={styles.form}>
           <Field
             icon="person-outline"
-            placeholder="Nombre completo"
-            value={displayName}
-            onChangeText={setDisplayName}
-          />
-          <Field
-            icon="at-outline"
-            placeholder="Username (ej: djanton23)"
+            placeholder="Nombre de usuario"
             value={username}
             onChangeText={setUsername}
             autoCapitalize="none"
           />
           <Field
             icon="mail-outline"
-            placeholder="Email"
+            placeholder="Correo electronico"
             value={email}
             onChangeText={setEmail}
             keyboardType="email-address"
@@ -107,25 +147,43 @@ export default function RegisterScreen() {
           />
           <Field
             icon="lock-closed-outline"
-            placeholder="Contraseña (mín. 6 caracteres)"
+            placeholder="Contrasena (min. 6 caracteres)"
             value={password}
             onChangeText={setPassword}
+            autoCapitalize="none"
+            secureTextEntry
+          />
+          <Field
+            icon="lock-closed-outline"
+            placeholder="Confirmar contrasena"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            autoCapitalize="none"
             secureTextEntry
           />
 
-          <TouchableOpacity onPress={handleRegister} disabled={loading} activeOpacity={0.8}>
-            <LinearGradient
-              colors={[Colors.primary, Colors.primaryDark]}
-              style={styles.primaryButton}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-            >
-              {loading ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.primaryButtonText}>Crear cuenta</Text>
-              )}
-            </LinearGradient>
+          <TouchableOpacity
+            style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
+            onPress={handleRegister}
+            disabled={loading}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>Crear cuenta</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => router.back()}
+            activeOpacity={0.7}
+            style={styles.loginRow}
+          >
+            <Text style={styles.loginText}>
+              Ya tienes cuenta?{' '}
+              <Text style={styles.loginLink}>Iniciar sesion</Text>
+            </Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -133,41 +191,84 @@ export default function RegisterScreen() {
   );
 }
 
-function Field({ icon, ...props }: any) {
-  return (
-    <View style={styles.inputWrapper}>
-      <Ionicons name={icon} size={20} color={Colors.textMuted} style={styles.inputIcon} />
-      <TextInput style={styles.input} placeholderTextColor={Colors.textMuted} {...props} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, paddingHorizontal: Spacing.lg, paddingTop: 60, paddingBottom: 40 },
-  backButton: { marginBottom: Spacing.xl },
-  header: { marginBottom: Spacing.xl },
-  title: { fontSize: 32, fontWeight: '800', color: Colors.text },
-  subtitle: { fontSize: 15, color: Colors.textSecondary, marginTop: 4 },
+  container: {
+    flex: 1,
+    backgroundColor: C.background,
+  },
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: 28,
+    paddingTop: 60,
+    paddingBottom: 48,
+  },
 
-  form: { gap: Spacing.md },
+  backButton: {
+    marginBottom: 32,
+    width: 40,
+  },
+
+  header: {
+    marginBottom: 32,
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: C.text,
+  },
+  subtitle: {
+    fontSize: 15,
+    color: C.textSecondary,
+    marginTop: 6,
+  },
+
+  form: {
+    gap: 14,
+  },
   inputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: Radius.md,
+    backgroundColor: C.surface,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: Spacing.md,
+    borderColor: C.border,
+    paddingHorizontal: 14,
     height: 52,
   },
-  inputIcon: { marginRight: Spacing.sm },
-  input: { flex: 1, color: Colors.text, fontSize: 16 },
+  inputIcon: {
+    marginRight: 10,
+  },
+  input: {
+    flex: 1,
+    color: C.text,
+    fontSize: 15,
+  },
   primaryButton: {
-    borderRadius: Radius.md,
     height: 52,
+    borderRadius: 14,
+    backgroundColor: C.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: Spacing.sm,
+    marginTop: 4,
   },
-  primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  primaryButtonDisabled: {
+    opacity: 0.6,
+  },
+  primaryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  loginRow: {
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  loginText: {
+    color: C.textSecondary,
+    fontSize: 14,
+  },
+  loginLink: {
+    color: C.primary,
+    fontWeight: '700',
+  },
 });

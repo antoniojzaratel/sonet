@@ -1,40 +1,19 @@
 import { Tabs } from 'expo-router';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Colors } from '@/constants/colors';
 
 interface TabIconProps {
-  iconName: any;
+  iconName: keyof typeof Ionicons.glyphMap;
   label: string;
   focused: boolean;
 }
 
 function TabIcon({ iconName, label, focused }: TabIconProps) {
-  const color = focused ? Colors.primary : '#555';
+  const color = focused ? '#A855F7' : '#555555';
   return (
     <View style={styles.tabItem}>
-      <Ionicons
-        name={focused ? iconName : (`${iconName}-outline` as any)}
-        size={22}
-        color={color}
-      />
+      <Ionicons name={iconName} size={22} color={color} />
       <Text style={[styles.tabLabel, { color }]}>{label}</Text>
-    </View>
-  );
-}
-
-function CenterIcon({ focused }: { focused: boolean }) {
-  return (
-    <View style={styles.centerWrapper}>
-      <LinearGradient
-        colors={['#A855F7', '#7C3AED']}
-        style={styles.centerButton}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      >
-        <Ionicons name="add" size={30} color="#fff" />
-      </LinearGradient>
     </View>
   );
 }
@@ -46,15 +25,31 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarStyle: styles.tabBar,
         tabBarShowLabel: false,
-        tabBarActiveTintColor: Colors.primary,
-        tabBarInactiveTintColor: '#555',
+        tabBarActiveTintColor: '#A855F7',
+        tabBarInactiveTintColor: '#555555',
       }}
     >
       <Tabs.Screen
-        name="profile"
+        name="index"
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon iconName="person" label="Perfil" focused={focused} />
+            <TabIcon
+              iconName={focused ? 'home' : 'home-outline'}
+              label="Feed"
+              focused={focused}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="discover"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon
+              iconName={focused ? 'search' : 'search-outline'}
+              label="Buscar"
+              focused={focused}
+            />
           ),
         }}
       />
@@ -62,25 +57,26 @@ export default function TabsLayout() {
         name="map"
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon iconName="ticket" label="Eventos" focused={focused} />
+            <TabIcon
+              iconName={focused ? 'calendar' : 'calendar-outline'}
+              label="Eventos"
+              focused={focused}
+            />
           ),
         }}
       />
       <Tabs.Screen
-        name="discover"
-        options={{
-          tabBarIcon: ({ focused }) => <CenterIcon focused={focused} />,
-        }}
-      />
-      <Tabs.Screen
-        name="index"
+        name="profile"
         options={{
           tabBarIcon: ({ focused }) => (
-            <TabIcon iconName="list" label="Feed" focused={focused} />
+            <TabIcon
+              iconName={focused ? 'person' : 'person-outline'}
+              label="Perfil"
+              focused={focused}
+            />
           ),
         }}
       />
-      {/* Hidden screens */}
       <Tabs.Screen name="date" options={{ href: null }} />
       <Tabs.Screen name="games" options={{ href: null }} />
     </Tabs>
@@ -89,8 +85,8 @@ export default function TabsLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: Colors.surface,
-    borderTopColor: '#1F1F1F',
+    backgroundColor: '#0D0D0D',
+    borderTopColor: '#2A2A2A',
     borderTopWidth: 1,
     height: 86,
     paddingBottom: 0,
@@ -106,22 +102,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
     letterSpacing: 0.2,
-  },
-  centerWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  centerButton: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#A855F7',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    elevation: 10,
   },
 });

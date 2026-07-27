@@ -1,298 +1,258 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
+  FlatList,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { VictoryPie } from 'victory-native';
-import { Colors } from '@/constants/colors';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useRatingStore } from '@/stores/ratingStore';
 import { useAuthStore } from '@/stores/authStore';
-import { useMusicStore } from '@/stores/musicStore';
-import {
-  fetchTopArtists,
-  extractGenresFromArtists,
-  mapGenresToCategories,
-  type GenreCategoryItem,
-} from '@/lib/spotify';
-import type { Rating } from '@/types';
+import { scoreColor, formatScore } from '@/lib/mockData';
+import { MusicDashboard } from '@/components/dashboard/MusicDashboard';
+import { Colors } from '@/constants/colors';
+import type { RatingEntry } from '@/stores/ratingStore';
 
-const ARTIST_COLORS = [Colors.primary, Colors.accent, Colors.secondary, Colors.warning, '#3B82F6'];
+type Tab = 'ratings' | 'top10' | 'stats';
 
-const PLACEHOLDER_GENRES: GenreCategoryItem[] = [
-  { label: 'Género A', value: 35, color: '#333333' },
-  { label: 'Género B', value: 28, color: '#2A2A2A' },
-  { label: 'Género C', value: 22, color: '#222222' },
-  { label: 'Otros',    value: 15, color: '#1A1A1A' },
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'ratings', label: 'Calificaciones' },
+  { key: 'top10', label: 'Top 10' },
+  { key: 'stats', label: 'Estadisticas' },
 ];
-
-function getMonthYearLabel(): string {
-  const now = new Date();
-  return now.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).toUpperCase();
-}
 
 function getInitials(name: string): string {
   return name
     .split(' ')
     .slice(0, 2)
-    .map((w) => w[0])
+    .map((w) => w[0] ?? '')
     .join('')
-    .toUpperCase();
+    .toUpperCase() || 'YO';
 }
 
-function getHandle(name: string): string {
-  const first = name.split(' ')[0].toLowerCase();
-  return `${first}_mty`;
+const CONTENT_TYPE_LABEL: Record<string, string> = {
+  track: 'Cancion',
+  album: 'Album',
+  podcast: 'Podcast',
+};
+
+function TypeBadge({ type }: { type: string }) {
+  return (
+    <View style={styles.typeBadge}>
+      <Text style={styles.typeBadgeText}>{CONTENT_TYPE_LABEL[type] ?? type}</Text>
+    </View>
+  );
 }
 
-function getRatingStats(ratings: Rating[]) {
-  const total = ratings.length;
-  const avgScore = total > 0 ? ratings.reduce((s, r) => s + r.score, 0) / total : 0;
-  const loveCount = ratings.filter((r) => r.score >= 8).length;
-  return { total, avgScore, loveCount };
-}
-
-function getTopRated(ratings: Rating[], n: number): Rating[] {
-  return [...ratings].sort((a, b) => b.score - a.score).slice(0, n);
+function RatingRow({ entry, showRank, rank }: { entry: RatingEntry; showRank?: boolean; rank?: number }) {
+  const color = scoreColor(entry.score);
+  return (
+    <View style={styles.ratingRow}>
+      {showRank && (
+        <Text style={styles.rankNumber}>{rank}.</Text>
+      )}
+      <View style={styles.coverBox}>
+        <Text style={styles.coverInitial}>
+          {entry.contentName[0]?.toUpperCase() ?? '?'}
+        </Text>
+      </View>
+      <View style={styles.ratingInfo}>
+        <Text style={styles.ratingTitle} numberOfLines={1}>{entry.contentName}</Text>
+        <Text style={styles.ratingArtist} numberOfLines={1}>{entry.artistName}</Text>
+        <TypeBadge type={entry.contentType} />
+      </View>
+      <View style={[styles.scoreBadge, { backgroundColor: color + '22', borderColor: color }]}>
+        <Text style={[styles.scoreText, { color }]}>{formatScore(entry.score)}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={14} color="#444" />
+    </View>
+  );
 }
 
 export default function ProfileScreen() {
-  const [humourSeed, setHumourSeed] = useState(0);
-  const [topArtists, setTopArtists] = useState<any[]>([]);
-  const [genreData, setGenreData] = useState<GenreCategoryItem[]>([]);
-  const [dataLoaded, setDataLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('ratings');
+  const [bio, setBio] = useState<string>('Sin bio aun');
 
-  const { user, spotifyToken } = useAuthStore();
-  const { myRatings, fetchMyRatings } = useMusicStore();
+  const { spotifyToken } = useAuthStore();
+  const { ratings, loading, loadRatings, getTopRated, getStats } = useRatingStore();
 
   useEffect(() => {
-    if (user?.id) {
-      fetchMyRatings(user.id);
-    }
-
-    if (spotifyToken) {
-      fetchTopArtists(spotifyToken, 'medium_term', 20).then((data) => {
-        if (data?.items) {
-          setTopArtists(data.items.slice(0, 3));
-          const genreMap = extractGenresFromArtists(data.items);
-          const mapped = mapGenresToCategories(genreMap);
-          if (mapped.length > 0) setGenreData(mapped);
+    loadRatings();
+    AsyncStorage.getItem('sonet_onboarding_genres').then((raw) => {
+      if (raw) {
+        try {
+          const genres: string[] = JSON.parse(raw);
+          if (genres.length > 0) setBio(genres.join(', '));
+        } catch {
+          // ignore
         }
-      });
-    }
+      }
+    });
+  }, []);
 
-    setDataLoaded(true);
-  }, [spotifyToken, user?.id]);
-
-  const displayName = user?.display_name ?? 'Tu perfil';
-  const initials = getInitials(displayName);
-  const handle = user?.display_name ? getHandle(user.display_name) : 'usuario';
-  const stats = getRatingStats(myRatings);
-  const topRated = getTopRated(myRatings, 5);
+  const stats = getStats();
+  const topRated = getTopRated(10);
   const hasSpotify = !!spotifyToken;
-  const activeGenreData = genreData.length > 0 ? genreData : PLACEHOLDER_GENRES;
+
+  const displayName = 'Tu Perfil';
+  const username = '@yo';
+  const initials = getInitials(displayName);
+
+  // Stats for dashboard tab
+  const dashboardRatings = ratings.map((r) => ({
+    score: r.score,
+    artist_name: r.artistName,
+    content_type: r.contentType,
+  }));
+
+  const uniqueArtists = new Set(ratings.map((r) => r.artistName)).size;
+
+  const handleSpotifyConnect = useCallback(() => {
+    Alert.alert('Proximamente', 'La integracion con Spotify llegara pronto');
+  }, []);
+
+  const sortedRatings = [...ratings].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+
+  const renderRatingItem = useCallback(
+    ({ item }: { item: RatingEntry }) => <RatingRow entry={item} />,
+    [],
+  );
+
+  const renderTopItem = useCallback(
+    ({ item, index }: { item: RatingEntry; index: number }) => (
+      <RatingRow entry={item} showRank rank={index + 1} />
+    ),
+    [],
+  );
+
+  const keyExtractor = useCallback((item: RatingEntry) => item.id, []);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} nestedScrollEnabled>
 
-        {/* Header row */}
-        <View style={styles.headerRow}>
-          <Text style={styles.headerLogo}>Sonet</Text>
-          <Text style={styles.headerMeta}>
-            {getMonthYearLabel()}  /{'  '}
-            <Text style={styles.headerShare}>compartir</Text>
-          </Text>
-        </View>
+        {/* Profile header */}
+        <View style={styles.header}>
+          <View style={styles.avatarCircle}>
+            <Text style={styles.avatarInitials}>{initials}</Text>
+          </View>
+          <Text style={styles.displayName}>{displayName}</Text>
+          <Text style={styles.username}>{username}</Text>
+          <Text style={styles.bio}>{bio}</Text>
 
-        {/* User card */}
-        <View style={styles.card}>
-          {user?.avatar_url ? (
-            <Image source={{ uri: user.avatar_url }} style={styles.avatarImage} />
-          ) : (
-            <View style={styles.avatarCircle}>
-              <Text style={styles.avatarInitials}>{initials}</Text>
+          {/* Stats row */}
+          <View style={styles.statsRow}>
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>{stats.total}</Text>
+              <Text style={styles.statLabel}>Calificaciones</Text>
             </View>
-          )}
-          <Text style={styles.userName}>{displayName}</Text>
-          <Text style={styles.userHandle}>@{handle}</Text>
-          <Text style={styles.userStats}>
-            {stats.total} ratings · {stats.avgScore.toFixed(1)} promedio
-          </Text>
-        </View>
-
-        {/* Stats row */}
-        <View style={styles.statsRow}>
-          <View style={styles.statBox}>
-            <Text style={styles.statNumber}>{stats.total}</Text>
-            <Text style={styles.statLabel}>calificaciones</Text>
-          </View>
-          <View style={[styles.statBox, styles.statBoxMid]}>
-            <Text style={styles.statNumber}>{stats.loveCount}</Text>
-            <Text style={styles.statLabel}>me encantó</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={styles.statNumber}>{stats.avgScore.toFixed(1)}</Text>
-            <Text style={styles.statLabel}>promedio</Text>
-          </View>
-        </View>
-
-        {/* Genre distribution card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Tu distribución de géneros</Text>
-          {!hasSpotify && genreData.length === 0 && (
-            <Text style={styles.connectHint}>Conecta Spotify para ver tus géneros reales</Text>
-          )}
-          <View style={styles.genreRow}>
-            <VictoryPie
-              data={activeGenreData}
-              x="label"
-              y="value"
-              colorScale={activeGenreData.map((d) => d.color)}
-              innerRadius={45}
-              width={140}
-              height={140}
-              padding={0}
-              labels={() => ''}
-            />
-            <View style={styles.legendCol}>
-              {activeGenreData.map((item) => (
-                <View key={item.label} style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: item.color }]} />
-                  <Text style={styles.legendText}>
-                    {item.value}% {item.label}
-                  </Text>
-                </View>
-              ))}
+            <View style={styles.statDivider} />
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>0</Text>
+              <Text style={styles.statLabel}>Seguidores</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statCol}>
+              <Text style={styles.statNumber}>0</Text>
+              <Text style={styles.statLabel}>Siguiendo</Text>
             </View>
           </View>
-        </View>
 
-        {/* Top artists card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Top artistas del mes</Text>
-          {!hasSpotify ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="musical-notes-outline" size={32} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>Conecta Spotify para ver tus artistas más escuchados</Text>
-            </View>
-          ) : topArtists.length === 0 && dataLoaded ? (
-            <Text style={styles.emptyText}>No encontramos artistas. Escucha más música 🎵</Text>
-          ) : (
-            topArtists.map((artist, idx) => {
-              const rank = String(idx + 1).padStart(2, '0');
-              const color = ARTIST_COLORS[idx % ARTIST_COLORS.length];
-              const imageUrl = artist.images?.[0]?.url;
-              return (
-                <View key={artist.id} style={styles.artistRow}>
-                  <Text style={styles.artistRank}>{rank}</Text>
-                  {imageUrl ? (
-                    <Image source={{ uri: imageUrl }} style={styles.artistAvatar} />
-                  ) : (
-                    <View style={[styles.artistAvatarFallback, { backgroundColor: color }]}>
-                      <Text style={styles.artistInitials}>{artist.name[0]}</Text>
-                    </View>
-                  )}
-                  <Text style={styles.artistName} numberOfLines={1}>{artist.name}</Text>
-                  <View style={[styles.changeBadge, { borderColor: color }]}>
-                    <Text style={[styles.changeBadgeText, { color }]}>↑</Text>
-                  </View>
-                </View>
-              );
-            })
-          )}
-        </View>
-
-        {/* Top ratings */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Tus mejores calificaciones</Text>
-          {topRated.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="star-outline" size={28} color={Colors.textMuted} />
-              <Text style={styles.emptyText}>
-                Aún no has calificado nada · ve al Diario para empezar
-              </Text>
-            </View>
-          ) : (
-            topRated.map((rating, idx) => {
-              const color = ARTIST_COLORS[idx % ARTIST_COLORS.length];
-              return (
-                <View key={rating.id} style={styles.ratingRow}>
-                  <View style={[styles.ratingInitial, { backgroundColor: color }]}>
-                    <Text style={styles.ratingInitialText}>
-                      {rating.content_name[0]?.toUpperCase() ?? '?'}
-                    </Text>
-                  </View>
-                  <View style={styles.ratingInfo}>
-                    <Text style={styles.ratingTitle} numberOfLines={1}>{rating.content_name}</Text>
-                    <Text style={styles.ratingArtist} numberOfLines={1}>{rating.artist_name}</Text>
-                  </View>
-                  <View style={[styles.scoreBadge, { backgroundColor: color + '22', borderColor: color }]}>
-                    <Text style={[styles.scoreText, { color }]}>{rating.score.toFixed(1)}</Text>
-                  </View>
-                </View>
-              );
-            })
-          )}
-        </View>
-
-        {/* AI humor reading card */}
-        <View style={styles.aiCard}>
-          <Text style={styles.cardTitle}>Tu sentido del humor 🤖</Text>
-          <Text style={styles.aiLabel}>Humor norteño-existencial</Text>
-          <Text style={styles.aiBody}>
-            Te ríes con memes de corridos a mediodía y lloras con Zoé a las 2 am. Tu chiste favorito
-            es negar que existe tu playlist "para llorar"... que tiene 84 canciones.
-          </Text>
-          <View style={styles.aiButtons}>
-            <TouchableOpacity style={styles.aiButtonOutlined}>
-              <Text style={styles.aiButtonOutlinedText}>Compartir</Text>
+          {/* Spotify connect — only if not connected */}
+          {!hasSpotify && (
+            <TouchableOpacity style={styles.spotifyButton} onPress={handleSpotifyConnect}>
+              <Text style={styles.spotifyButtonText}>Conectar Spotify</Text>
             </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Tab selector */}
+        <View style={styles.tabBar}>
+          {TABS.map((tab) => (
             <TouchableOpacity
-              style={styles.aiButtonFilled}
-              onPress={() => setHumourSeed((s) => s + 1)}
+              key={tab.key}
+              style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+              onPress={() => setActiveTab(tab.key)}
             >
-              <Text style={styles.aiButtonFilledText}>Otra lectura</Text>
+              <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]}>
+                {tab.label}
+              </Text>
             </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Tab content */}
+        {activeTab === 'ratings' && (
+          <View style={styles.tabContent}>
+            {sortedRatings.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>Aun no has calificado nada</Text>
+                <Text style={styles.emptySubtext}>Toca + en el feed para empezar</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={sortedRatings}
+                keyExtractor={keyExtractor}
+                renderItem={renderRatingItem}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            )}
           </View>
-          <Text style={styles.aiFootnote}>Generado por IA · se renueva cada mes</Text>
-        </View>
+        )}
 
-        {/* Premium card */}
-        <View style={styles.premiumCard}>
-          <Text style={styles.premiumTitle}>✦ Sonet Premium</Text>
-          <Text style={styles.premiumDesc}>
-            Accede a estadísticas avanzadas, modo sin publicidad y descuentos exclusivos en conciertos.
-          </Text>
-          <View style={styles.premiumRow}>
-            <Text style={styles.premiumPrice}>$99 MXN / mes</Text>
-            <TouchableOpacity style={styles.premiumButton}>
-              <Text style={styles.premiumButtonText}>Probar 7 días</Text>
-            </TouchableOpacity>
+        {activeTab === 'top10' && (
+          <View style={styles.tabContent}>
+            {topRated.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>Aun no has calificado nada</Text>
+                <Text style={styles.emptySubtext}>Toca + en el feed para empezar</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={topRated}
+                keyExtractor={keyExtractor}
+                renderItem={renderTopItem}
+                scrollEnabled={false}
+                ItemSeparatorComponent={() => <View style={styles.separator} />}
+              />
+            )}
           </View>
-        </View>
+        )}
 
-        {/* Privacy section */}
-        <View style={styles.privacySection}>
-          <TouchableOpacity style={styles.privacyRow}>
-            <Ionicons name="musical-note-outline" size={18} color={Colors.textSecondary} />
-            <Text style={styles.privacyText}>Perfil musical visible: solo amigos</Text>
-            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.privacyRow}>
-            <Ionicons name="notifications-outline" size={18} color={Colors.textSecondary} />
-            <Text style={[styles.privacyText, { flex: 1 }]} numberOfLines={1}>
-              Notificaciones de actividad social
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-          </TouchableOpacity>
-        </View>
+        {activeTab === 'stats' && (
+          <View style={styles.tabContent}>
+            {/* Summary card */}
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryValue}>{stats.avgScore.toFixed(1)}</Text>
+                <Text style={styles.summaryLabel}>Puntuacion promedio</Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryValue}>{stats.total}</Text>
+                <Text style={styles.summaryLabel}>Total calificaciones</Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryItem}>
+                <Text style={styles.summaryValue}>{uniqueArtists}</Text>
+                <Text style={styles.summaryLabel}>Artistas distintos</Text>
+              </View>
+            </View>
 
-        <View style={{ height: 40 }} />
+            {/* Dashboard charts */}
+            <MusicDashboard ratings={dashboardRatings} />
+          </View>
+        )}
+
+        <View style={{ height: 48 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -301,367 +261,251 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+    backgroundColor: '#0D0D0D',
   },
 
-  /* Header */
-  headerRow: {
-    flexDirection: 'row',
+  // Profile header
+  header: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  headerLogo: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: Colors.text,
-  },
-  headerMeta: {
-    fontSize: 11,
-    color: Colors.warning,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-  },
-  headerShare: {
-    color: Colors.warning,
-  },
-
-  /* Cards */
-  card: {
-    backgroundColor: Colors.surface,
-    borderRadius: 16,
-    padding: 20,
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.text,
-    marginBottom: 14,
-  },
-
-  /* User card */
-  avatarImage: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    marginBottom: 12,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 20,
   },
   avatarCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: Colors.primary,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#A855F7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
   },
   avatarInitials: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: '700',
     color: '#fff',
   },
-  userName: {
-    fontSize: 20,
+  displayName: {
+    fontSize: 22,
     fontWeight: '700',
-    color: Colors.text,
+    color: '#fff',
     marginBottom: 4,
   },
-  userHandle: {
-    fontSize: 13,
-    color: Colors.textMuted,
+  username: {
+    fontSize: 14,
+    color: '#A0A0A0',
     marginBottom: 8,
   },
-  userStats: {
+  bio: {
     fontSize: 13,
-    color: Colors.textSecondary,
+    color: '#A0A0A0',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 19,
   },
 
-  /* Stats row */
+  // Stats row
   statsRow: {
     flexDirection: 'row',
-    marginHorizontal: 16,
-    marginBottom: 12,
-    gap: 8,
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
+    alignItems: 'center',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
     paddingVertical: 14,
+    paddingHorizontal: 8,
+    width: '100%',
+    marginBottom: 14,
+  },
+  statCol: {
+    flex: 1,
     alignItems: 'center',
   },
-  statBoxMid: {
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderColor: Colors.border,
-  },
   statNumber: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
-    color: Colors.text,
+    color: '#fff',
     marginBottom: 2,
   },
   statLabel: {
     fontSize: 11,
-    color: Colors.textMuted,
+    color: '#666',
     textAlign: 'center',
   },
-
-  /* Genre distribution */
-  genreRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-  },
-  legendCol: {
-    flex: 1,
-    gap: 10,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  legendDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  legendText: {
-    fontSize: 12,
-    color: Colors.textSecondary,
-    flexShrink: 1,
-  },
-  connectHint: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginBottom: 12,
-    fontStyle: 'italic',
+  statDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: '#2A2A2A',
   },
 
-  /* Top artists */
-  artistRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 8,
-  },
-  artistRank: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Colors.textMuted,
-    width: 24,
-  },
-  artistAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-  },
-  artistAvatarFallback: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  artistInitials: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  artistName: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  changeBadge: {
+  // Spotify button
+  spotifyButton: {
     borderWidth: 1,
-    borderRadius: 99,
-    paddingVertical: 3,
-    paddingHorizontal: 10,
+    borderColor: '#1DB954',
+    borderRadius: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
   },
-  changeBadgeText: {
-    fontSize: 12,
+  spotifyButtonText: {
+    color: '#1DB954',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    marginHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2A2A2A',
+    marginBottom: 4,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  tabActive: {
+    borderBottomColor: '#A855F7',
+  },
+  tabLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#666',
+  },
+  tabLabelActive: {
+    color: '#fff',
     fontWeight: '700',
   },
 
-  /* Ratings list */
+  // Tab content
+  tabContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+
+  // Rating row
   ratingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 8,
+    gap: 10,
+    paddingVertical: 10,
   },
-  ratingInitial: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+  rankNumber: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#666',
+    width: 24,
+    textAlign: 'right',
+  },
+  coverBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    backgroundColor: '#2A2A2A',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  ratingInitialText: {
-    fontSize: 16,
+  coverInitial: {
+    fontSize: 18,
     fontWeight: '700',
     color: '#fff',
   },
   ratingInfo: {
     flex: 1,
+    gap: 2,
   },
   ratingTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
-    color: Colors.text,
-    marginBottom: 2,
+    color: '#fff',
   },
   ratingArtist: {
-    fontSize: 12,
-    color: Colors.textMuted,
+    fontSize: 13,
+    color: '#A0A0A0',
+  },
+  typeBadge: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  typeBadgeText: {
+    fontSize: 10,
+    color: '#888',
+    fontWeight: '600',
   },
   scoreBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
     borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   scoreText: {
     fontSize: 14,
     fontWeight: '800',
   },
+  separator: {
+    height: 1,
+    backgroundColor: '#1E1E1E',
+    marginHorizontal: 4,
+  },
 
-  /* Empty state */
+  // Empty state
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 20,
-    gap: 10,
+    paddingVertical: 48,
+    gap: 8,
   },
-  emptyText: {
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  emptySubtext: {
     fontSize: 13,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 19,
+    color: '#666',
   },
 
-  /* AI card */
-  aiCard: {
-    backgroundColor: '#1A0A2E',
+  // Summary card (stats tab)
+  summaryCard: {
+    flexDirection: 'row',
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 16,
-    padding: 20,
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
-  aiLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.primary,
-    marginBottom: 8,
-  },
-  aiBody: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-    lineHeight: 20,
+    borderColor: '#2A2A2A',
+    paddingVertical: 16,
+    paddingHorizontal: 8,
     marginBottom: 16,
   },
-  aiButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
-  aiButtonOutlined: {
+  summaryItem: {
     flex: 1,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-    borderRadius: 99,
-    paddingVertical: 10,
     alignItems: 'center',
   },
-  aiButtonOutlinedText: {
-    color: Colors.primary,
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  aiButtonFilled: {
-    flex: 1,
-    backgroundColor: Colors.primary,
-    borderRadius: 99,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  aiButtonFilledText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  aiFootnote: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    textAlign: 'center',
-  },
-
-  /* Premium card */
-  premiumCard: {
-    backgroundColor: '#1C1200',
-    borderWidth: 1,
-    borderColor: Colors.warning,
-    borderRadius: 16,
-    padding: 20,
-    marginHorizontal: 16,
-    marginBottom: 12,
-  },
-  premiumTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Colors.warning,
-    marginBottom: 8,
-  },
-  premiumDesc: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginBottom: 14,
-    lineHeight: 19,
-  },
-  premiumRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  premiumPrice: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: Colors.text,
-  },
-  premiumButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: 99,
-    paddingVertical: 9,
-    paddingHorizontal: 18,
-  },
-  premiumButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
-  },
-
-  /* Privacy section */
-  privacySection: {
-    marginHorizontal: 16,
-    gap: 8,
+  summaryValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#A855F7',
     marginBottom: 4,
   },
-  privacyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 4,
+  summaryLabel: {
+    fontSize: 10,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 14,
   },
-  privacyText: {
-    flex: 1,
-    fontSize: 13,
-    color: Colors.text,
+  summaryDivider: {
+    width: 1,
+    height: 40,
+    backgroundColor: '#2A2A2A',
+    alignSelf: 'center',
   },
 });

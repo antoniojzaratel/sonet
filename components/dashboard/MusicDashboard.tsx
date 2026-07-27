@@ -1,212 +1,304 @@
-import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
-import { VictoryPie, VictoryBar, VictoryChart, VictoryTheme, VictoryAxis } from 'victory-native';
-import { useAuthStore } from '@/stores/authStore';
-import { fetchTopArtists, extractGenresFromArtists } from '@/lib/spotify';
+import { View, Text, StyleSheet } from 'react-native';
 import { Colors, Spacing, Radius } from '@/constants/colors';
-import { genreToColor } from '@/lib/utils';
-import type { Rating } from '@/types';
 
 interface Props {
-  userId: string;
-  ratings: Rating[];
+  ratings: { score: number; artist_name: string; content_type: string }[];
 }
 
-export function MusicDashboard({ userId, ratings }: Props) {
-  const { spotifyToken } = useAuthStore();
-  const [genres, setGenres] = useState<{ x: string; y: number; fill: string }[]>([]);
-  const [loadingSpotify, setLoadingSpotify] = useState(false);
+const BAR_COLORS = [
+  Colors.primary,
+  '#3B82F6',
+  Colors.secondary,
+  Colors.accent,
+  '#F59E0B',
+];
 
-  useEffect(() => {
-    if (spotifyToken) loadSpotifyData();
-    else buildGenresFromRatings();
-  }, [spotifyToken, ratings]);
+function scoreColor(score: number): string {
+  if (score >= 8) return Colors.success;
+  if (score >= 6) return Colors.warning;
+  return Colors.error;
+}
 
-  const loadSpotifyData = async () => {
-    if (!spotifyToken) return;
-    setLoadingSpotify(true);
-    try {
-      const result = await fetchTopArtists(spotifyToken, 'medium_term', 30);
-      const items = result?.items ?? [];
-      const genreCount = extractGenresFromArtists(items);
-      const sorted = Object.entries(genreCount)
-        .sort(([, a], [, b]) => b - a)
-        .slice(0, 6);
-      const total = sorted.reduce((s, [, v]) => s + v, 0);
-      setGenres(
-        sorted.map(([genre, count], i) => ({
-          x: genre,
-          y: Math.round((count / total) * 100),
-          fill: genreToColor(i),
-        })),
-      );
-    } catch {}
-    setLoadingSpotify(false);
-  };
-
-  const buildGenresFromRatings = () => {
-    if (ratings.length === 0) return;
-    const artistCount: Record<string, number> = {};
-    ratings.forEach((r) => {
-      artistCount[r.artist_name] = (artistCount[r.artist_name] || 0) + 1;
-    });
-    const sorted = Object.entries(artistCount).sort(([, a], [, b]) => b - a).slice(0, 6);
-    const total = sorted.reduce((s, [, v]) => s + v, 0);
-    setGenres(
-      sorted.map(([name, count], i) => ({
-        x: name,
-        y: Math.round((count / total) * 100),
-        fill: genreToColor(i),
-      })),
-    );
-  };
-
-  const ratingsByType = Object.entries(
-    ratings.reduce((acc, r) => {
-      acc[r.content_type] = (acc[r.content_type] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>),
-  ).map(([type, count]) => ({ x: type, y: count }));
-
-  if (loadingSpotify) {
+export function MusicDashboard({ ratings }: Props) {
+  if (ratings.length === 0) {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator color={Colors.primary} />
-        <Text style={styles.loadingText}>Sincronizando con Spotify...</Text>
+      <View style={styles.empty}>
+        <Text style={styles.emptyTitle}>Sin datos aun</Text>
+        <Text style={styles.emptyText}>
+          Califica musica para ver tus estadisticas aqui
+        </Text>
       </View>
     );
   }
 
+  // Average score
+  const avgScore = ratings.reduce((s, r) => s + r.score, 0) / ratings.length;
+
+  // Score distribution (buckets 1-10)
+  const buckets = Array.from({ length: 10 }, (_, i) => i + 1).map((score) => ({
+    score,
+    count: ratings.filter((r) => Math.floor(r.score) === score || (score === 10 && r.score === 10)).length,
+  }));
+  const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+  // Top 5 artists by rating count
+  const artistCount: Record<string, number> = {};
+  ratings.forEach((r) => {
+    if (r.artist_name) {
+      artistCount[r.artist_name] = (artistCount[r.artist_name] || 0) + 1;
+    }
+  });
+  const topArtists = Object.entries(artistCount)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5);
+  const maxArtistCount = topArtists.length > 0 ? topArtists[0][1] : 1;
+
+  // Content type breakdown
+  const typeCount: Record<string, number> = {};
+  ratings.forEach((r) => {
+    const t = r.content_type || 'track';
+    typeCount[t] = (typeCount[t] || 0) + 1;
+  });
+  const typeEntries = Object.entries(typeCount).sort(([, a], [, b]) => b - a);
+
   return (
     <View style={styles.container}>
-      {genres.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>🎸 Géneros Favoritos</Text>
-          <View style={styles.pieContainer}>
-            <VictoryPie
-              data={genres}
-              width={280}
-              height={220}
-              innerRadius={60}
-              padding={20}
-              colorScale={genres.map((g) => g.fill)}
-              labels={({ datum }) => `${datum.x}\n${datum.y}%`}
-              style={{
-                labels: { fill: Colors.textSecondary, fontSize: 9, fontWeight: '600' },
-              }}
-            />
-          </View>
-          <View style={styles.legend}>
-            {genres.map((g) => (
-              <View key={g.x} style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: g.fill }]} />
-                <Text style={styles.legendText} numberOfLines={1}>{g.x}</Text>
-                <Text style={[styles.legendPct, { color: g.fill }]}>{g.y}%</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {ratings.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>📊 Rating Promedio</Text>
-          <View style={styles.avgContainer}>
-            <Text style={styles.avgScore}>
-              {(ratings.reduce((s, r) => s + r.score, 0) / ratings.length).toFixed(1)}
-            </Text>
-            <Text style={styles.avgLabel}>de 10.0</Text>
-          </View>
-          <View style={styles.scoreBar}>
-            {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((score) => {
-              const count = ratings.filter((r) => Math.floor(r.score) === score).length;
-              const max = Math.max(...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(
-                (s) => ratings.filter((r) => Math.floor(r.score) === s).length,
-              ), 1);
-              return (
-                <View key={score} style={styles.barGroup}>
-                  <View style={[styles.bar, { height: Math.max(4, (count / max) * 60), backgroundColor: genreToColor(score) }]} />
-                  <Text style={styles.barLabel}>{score}</Text>
-                </View>
-              );
-            })}
-          </View>
-        </View>
-      )}
-
-      {ratingsByType.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>📀 Por Tipo</Text>
-          {ratingsByType.map((item) => (
-            <View key={item.x} style={styles.typeRow}>
-              <Text style={styles.typeLabel}>{TYPE_EMOJI[item.x] || '🎵'} {item.x}</Text>
-              <View style={styles.typeBarContainer}>
-                <View style={[styles.typeBar, { width: `${(item.y / ratings.length) * 100}%` as any }]} />
-              </View>
-              <Text style={styles.typeCount}>{item.y}</Text>
-            </View>
-          ))}
-        </View>
-      )}
-
-      {ratings.length === 0 && genres.length === 0 && (
-        <View style={styles.empty}>
-          <Text style={styles.emptyEmoji}>📊</Text>
-          <Text style={styles.emptyTitle}>Sin datos aún</Text>
-          <Text style={styles.emptyText}>
-            Conecta Spotify o califica música para ver tus estadísticas
+      {/* Average score */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Puntuacion promedio</Text>
+        <View style={styles.avgRow}>
+          <Text style={[styles.avgScore, { color: scoreColor(avgScore) }]}>
+            {avgScore.toFixed(1)}
           </Text>
+          <Text style={styles.avgSub}>de 10.0</Text>
+        </View>
+      </View>
+
+      {/* Score distribution */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Distribucion de scores</Text>
+        <View style={styles.barChart}>
+          {buckets.map((b) => {
+            const barHeight = Math.max(4, (b.count / maxBucket) * 72);
+            return (
+              <View key={b.score} style={styles.barGroup}>
+                <Text style={styles.barCount}>{b.count > 0 ? b.count : ''}</Text>
+                <View
+                  style={[
+                    styles.bar,
+                    {
+                      height: barHeight,
+                      backgroundColor: b.count > 0 ? scoreColor(b.score) : '#2A2A2A',
+                    },
+                  ]}
+                />
+                <Text style={styles.barLabel}>{b.score}</Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* Top artists */}
+      {topArtists.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Artistas mas calificados</Text>
+          {topArtists.map(([name, count], idx) => {
+            const barWidth = (count / maxArtistCount) * 100;
+            const color = BAR_COLORS[idx % BAR_COLORS.length];
+            return (
+              <View key={name} style={styles.artistRow}>
+                <Text style={styles.artistName} numberOfLines={1}>
+                  {name}
+                </Text>
+                <View style={styles.artistBarContainer}>
+                  <View
+                    style={[
+                      styles.artistBar,
+                      { width: `${barWidth}%` as any, backgroundColor: color },
+                    ]}
+                  />
+                </View>
+                <Text style={[styles.artistCount, { color }]}>{count}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {/* Content type breakdown */}
+      {typeEntries.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Por tipo de contenido</Text>
+          {typeEntries.map(([type, count], idx) => {
+            const color = BAR_COLORS[idx % BAR_COLORS.length];
+            const pct = Math.round((count / ratings.length) * 100);
+            return (
+              <View key={type} style={styles.typeRow}>
+                <Text style={styles.typeLabel}>{type}</Text>
+                <View style={styles.typeBarContainer}>
+                  <View
+                    style={[
+                      styles.typeBar,
+                      { width: `${pct}%` as any, backgroundColor: color },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.typeCount}>{count}</Text>
+              </View>
+            );
+          })}
         </View>
       )}
     </View>
   );
 }
 
-const TYPE_EMOJI: Record<string, string> = {
-  song: '🎵',
-  album: '💿',
-  podcast: '🎙️',
-  single: '🎶',
-  concert: '🎤',
-  music_video: '🎬',
-};
-
 const styles = StyleSheet.create({
-  container: { gap: Spacing.md },
+  container: {
+    gap: Spacing.sm,
+  },
+
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radius.lg,
     padding: Spacing.md,
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: '#2A2A2A',
   },
-  cardTitle: { fontSize: 15, fontWeight: '700', color: Colors.text, marginBottom: Spacing.md },
-  pieContainer: { alignItems: 'center' },
-  legend: { gap: 6, marginTop: Spacing.sm },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  legendDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
-  legendText: { flex: 1, color: Colors.textSecondary, fontSize: 13 },
-  legendPct: { fontSize: 13, fontWeight: '700' },
 
-  avgContainer: { alignItems: 'center', marginBottom: Spacing.md },
-  avgScore: { fontSize: 56, fontWeight: '900', color: Colors.primary },
-  avgLabel: { color: Colors.textMuted, fontSize: 13, marginTop: -4 },
+  cardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text,
+    marginBottom: Spacing.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
 
-  scoreBar: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', height: 80 },
-  barGroup: { alignItems: 'center', gap: 4, flex: 1 },
-  bar: { width: '80%', borderRadius: 3, minHeight: 4 },
-  barLabel: { color: Colors.textMuted, fontSize: 9 },
+  // Average score
+  avgRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  avgScore: {
+    fontSize: 56,
+    fontWeight: '900',
+    lineHeight: 60,
+  },
+  avgSub: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    marginTop: 8,
+  },
 
-  typeRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: 8 },
-  typeLabel: { color: Colors.textSecondary, fontSize: 13, width: 100 },
-  typeBarContainer: { flex: 1, height: 6, backgroundColor: Colors.background, borderRadius: 3, overflow: 'hidden' },
-  typeBar: { height: '100%', backgroundColor: Colors.primary, borderRadius: 3 },
-  typeCount: { color: Colors.textMuted, fontSize: 12, width: 24, textAlign: 'right' },
+  // Bar chart (score distribution)
+  barChart: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    height: 100,
+    gap: 3,
+  },
+  barGroup: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 3,
+  },
+  barCount: {
+    fontSize: 9,
+    color: Colors.textMuted,
+    height: 12,
+    textAlign: 'center',
+  },
+  bar: {
+    width: '100%',
+    borderRadius: 3,
+  },
+  barLabel: {
+    fontSize: 9,
+    color: Colors.textMuted,
+    textAlign: 'center',
+  },
 
-  loading: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xl },
-  loadingText: { color: Colors.textSecondary, fontSize: 13 },
-  empty: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xxl },
-  emptyEmoji: { fontSize: 48 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.text },
-  emptyText: { fontSize: 13, color: Colors.textSecondary, textAlign: 'center' },
+  // Artist bars
+  artistRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: 10,
+  },
+  artistName: {
+    width: 90,
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  artistBarContainer: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  artistBar: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  artistCount: {
+    fontSize: 12,
+    fontWeight: '700',
+    width: 20,
+    textAlign: 'right',
+  },
+
+  // Type breakdown
+  typeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    marginBottom: 10,
+  },
+  typeLabel: {
+    width: 80,
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textTransform: 'capitalize',
+  },
+  typeBarContainer: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  typeBar: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  typeCount: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    width: 20,
+    textAlign: 'right',
+  },
+
+  // Empty state
+  empty: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xl,
+    gap: Spacing.sm,
+  },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.text,
+  },
+  emptyText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
 });

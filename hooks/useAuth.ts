@@ -3,33 +3,32 @@ import { useRouter, useSegments } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 
-// Demo mode: active when no real Supabase URL is configured
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
+
 export const isDemoMode =
-  !SUPABASE_URL || SUPABASE_URL.includes('placeholder') || SUPABASE_URL.includes('your-project');
+  !SUPABASE_URL ||
+  SUPABASE_URL.includes('placeholder') ||
+  SUPABASE_URL.includes('your-project');
 
 export function useAuth() {
-  const { user, session, loading } = useAuthStore();
-  return { user, session, loading, isAuthenticated: isDemoMode || !!session };
+  const { user, loading } = useAuthStore();
+  return { user, loading };
 }
 
-export function useProtectedRoute() {
-  const { session, loading } = useAuthStore();
+export function useProtectedRoute(isSignedIn: boolean) {
   const segments = useSegments();
   const router = useRouter();
 
   useEffect(() => {
-    // In demo mode, never redirect to login
     if (isDemoMode) return;
-    if (loading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
-    if (!session && !inAuthGroup) {
+    if (!isSignedIn && !inAuthGroup) {
       router.replace('/(auth)/login');
-    } else if (session && inAuthGroup) {
+    } else if (isSignedIn && inAuthGroup) {
       router.replace('/(tabs)');
     }
-  }, [session, segments, loading]);
+  }, [isSignedIn, segments]);
 }
 
 export function useSupabaseAuth() {

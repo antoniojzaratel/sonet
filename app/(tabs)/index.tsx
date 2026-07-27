@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,423 +6,471 @@ import {
   StyleSheet,
   TouchableOpacity,
   RefreshControl,
-  ScrollView,
+  Modal,
   TextInput,
-  Image,
-  ActivityIndicator,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useMusicStore } from '@/stores/musicStore';
-import { useAuthStore } from '@/stores/authStore';
+import {
+  MOCK_RATINGS,
+  getUserById,
+  scoreColor,
+  formatScore,
+  timeAgo,
+  POPULAR_CATALOG,
+  searchCatalog,
+  type MockRating,
+  type CatalogItem,
+} from '@/lib/mockData';
 import { useRatingStore } from '@/stores/ratingStore';
-import type { EmojiType } from '@/stores/ratingStore';
-import { searchSpotify } from '@/lib/spotify';
-import { FeedRatingCard } from '@/components/rating/FeedRatingCard';
-import { RateModal } from '@/components/rating/RateModal';
-import { SongOfTheDay } from '@/components/recommendations/SongOfTheDay';
-import { Colors, Spacing } from '@/constants/colors';
-import type { FeedItem } from '@/types';
+import type { RatingEntry } from '@/stores/ratingStore';
 
-type MainTab = 'feed' | 'diario';
-type EloChoice = 'left' | 'right' | null;
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-interface SearchResult {
-  id: string;
-  name: string;
-  artist: string;
-  imageUrl: string;
-  type: 'track' | 'album';
-  album: string;
+interface FeedRating extends MockRating {
+  user: {
+    displayName: string;
+    username: string;
+    initials: string;
+    avatarColor: string;
+  };
 }
 
-// Palette of colors for initial-circle fallback
-const INITIAL_COLORS = ['#A855F7', '#84CC16', '#F43F5E', '#3B82F6', '#F59E0B', '#10B981'];
-function colorForId(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash + id.charCodeAt(i)) % INITIAL_COLORS.length;
-  return INITIAL_COLORS[hash];
+// ─── FeedCard ─────────────────────────────────────────────────────────────────
+
+interface FeedCardProps {
+  item: FeedRating;
+  liked: boolean;
+  onToggleLike: (id: string) => void;
 }
 
-function DiarioTab() {
-  const router = useRouter();
-  const { spotifyToken } = useAuthStore();
-  const { ratings, loadRatings, addRating, getTopRated, getRatingForContent } = useRatingStore();
+function FeedCard({ item, liked, onToggleLike }: FeedCardProps) {
+  const displayLikeCount = liked
+    ? item.likedByMe
+      ? item.likeCount
+      : item.likeCount + 1
+    : item.likedByMe
+    ? item.likeCount - 1
+    : item.likeCount;
+
+  return (
+    <View style={styles.card}>
+      {/* Row 1: user info + time */}
+      <View style={styles.cardRow}>
+        <View style={[styles.avatar, { backgroundColor: item.user.avatarColor }]}>
+          <Text style={styles.avatarText}>{item.user.initials}</Text>
+        </View>
+        <View style={styles.userCol}>
+          <Text style={styles.displayName}>{item.user.displayName}</Text>
+          <Text style={styles.userMeta}>
+            @{item.user.username} · {timeAgo(item.createdAt)}
+          </Text>
+        </View>
+      </View>
+
+      {/* Row 2: content */}
+      <View style={[styles.cardRow, styles.contentRow]}>
+        <View style={[styles.cover, { backgroundColor: item.coverColor }]}>
+          <Text style={styles.coverInitial}>{item.coverInitial}</Text>
+        </View>
+        <View style={styles.contentCol}>
+          <Text style={styles.contentName} numberOfLines={1}>
+            {item.contentName}
+          </Text>
+          <Text style={styles.artistName}>{item.artistName}</Text>
+          <Text style={styles.contentType}>
+            {item.contentType === 'album' ? 'ALBUM' : 'CANCION'}
+          </Text>
+        </View>
+        <View style={[styles.scoreBadge, { backgroundColor: scoreColor(item.score) }]}>
+          <Text style={styles.scoreText}>{formatScore(item.score)}</Text>
+        </View>
+      </View>
+
+      {/* Review */}
+      {!!item.review && (
+        <Text style={styles.review}>{item.review}</Text>
+      )}
+
+      {/* Row 3: actions */}
+      <View style={styles.actionsRow}>
+        <TouchableOpacity
+          style={styles.likeBtn}
+          onPress={() => onToggleLike(item.id)}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name={liked ? 'heart' : 'heart-outline'}
+            size={18}
+            color={liked ? '#F43F5E' : '#666666'}
+          />
+          <Text style={[styles.likeCount, liked && styles.likeCountActive]}>
+            {displayLikeCount > 0 ? String(displayLikeCount) : 'Me gusta'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+// ─── RateModal ────────────────────────────────────────────────────────────────
+
+const SCORE_OPTIONS = Array.from({ length: 19 }, (_, i) =>
+  parseFloat((1.0 + i * 0.5).toFixed(1)),
+);
+
+interface RateModalProps {
+  visible: boolean;
+  onClose: () => void;
+}
+
+function RateModal({ visible, onClose }: RateModalProps) {
+  const { addRating } = useRatingStore();
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [selectedContent, setSelectedContent] = useState<SearchResult | null>(null);
-  const [selectedEmoji, setSelectedEmoji] = useState<EmojiType | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [eloChoice, setEloChoice] = useState<EloChoice>(null);
+  const [searchResults, setSearchResults] = useState<CatalogItem[]>(POPULAR_CATALOG.slice(0, 8));
+  const [selectedItem, setSelectedItem] = useState<CatalogItem | null>(null);
+  const [score, setScore] = useState(5.0);
+  const [review, setReview] = useState('');
+
+  const handleSearch = useCallback((q: string) => {
+    setSearchQuery(q);
+    setSearchResults(searchCatalog(q).slice(0, 10));
+  }, []);
+
+  const handleSelectItem = (item: CatalogItem) => {
+    setSelectedItem(item);
+    setScore(5.0);
+    setReview('');
+  };
+
+  const handlePublish = async () => {
+    if (!selectedItem) return;
+    await addRating({
+      contentId: selectedItem.id,
+      contentName: selectedItem.name,
+      artistName: selectedItem.artist,
+      imageUrl: '',
+      contentType: selectedItem.type,
+      score,
+      emoji: score >= 8 ? 'love' : score >= 5 ? 'like' : 'meh',
+      review: review.trim() || undefined,
+    });
+    handleClose();
+  };
+
+  const handleClose = () => {
+    setSearchQuery('');
+    setSearchResults(POPULAR_CATALOG.slice(0, 8));
+    setSelectedItem(null);
+    setScore(5.0);
+    setReview('');
+    onClose();
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      onRequestClose={handleClose}
+    >
+      <KeyboardAvoidingView
+        style={styles.modalContainer}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        {/* Modal header */}
+        <View style={styles.modalHeader}>
+          <Text style={styles.modalTitle}>Calificar</Text>
+          <TouchableOpacity onPress={handleClose} activeOpacity={0.7} hitSlop={12}>
+            <Ionicons name="close" size={24} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView
+          style={styles.modalScroll}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {!selectedItem ? (
+            <>
+              {/* Search input */}
+              <View style={styles.searchBar}>
+                <Ionicons name="search-outline" size={18} color="#666666" />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Busca canciones o albums..."
+                  placeholderTextColor="#666666"
+                  value={searchQuery}
+                  onChangeText={handleSearch}
+                  autoFocus
+                />
+              </View>
+
+              {/* Results list */}
+              <Text style={styles.sectionLabel}>
+                {searchQuery.trim() ? 'Resultados' : 'Populares'}
+              </Text>
+              {searchResults.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.catalogRow}
+                  onPress={() => handleSelectItem(item)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.catalogCover, { backgroundColor: item.coverColor }]}>
+                    <Text style={styles.catalogInitial}>{item.coverInitial}</Text>
+                  </View>
+                  <View style={styles.catalogInfo}>
+                    <Text style={styles.catalogName} numberOfLines={1}>
+                      {item.name}
+                    </Text>
+                    <Text style={styles.catalogArtist} numberOfLines={1}>
+                      {item.artist} · {item.type === 'album' ? 'Album' : 'Cancion'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#444444" />
+                </TouchableOpacity>
+              ))}
+            </>
+          ) : (
+            <>
+              {/* Selected item header */}
+              <View style={styles.selectedHeader}>
+                <View style={[styles.selectedCover, { backgroundColor: selectedItem.coverColor }]}>
+                  <Text style={styles.selectedInitial}>{selectedItem.coverInitial}</Text>
+                </View>
+                <View style={styles.selectedInfo}>
+                  <Text style={styles.selectedName} numberOfLines={1}>
+                    {selectedItem.name}
+                  </Text>
+                  <Text style={styles.selectedArtist}>{selectedItem.artist}</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSelectedItem(null)}
+                  activeOpacity={0.7}
+                  hitSlop={12}
+                >
+                  <Ionicons name="close-circle" size={22} color="#555555" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Score display */}
+              <View style={styles.scoreDisplay}>
+                <Text style={[styles.scoreNumber, { color: scoreColor(score) }]}>
+                  {formatScore(score)}
+                </Text>
+                <Text style={styles.scoreLabel}>/ 10</Text>
+              </View>
+
+              {/* Score picker */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.scorePicker}
+                contentContainerStyle={styles.scorePickerContent}
+              >
+                {SCORE_OPTIONS.map((s) => {
+                  const active = s === score;
+                  return (
+                    <TouchableOpacity
+                      key={s}
+                      style={[styles.scoreChip, active && styles.scoreChipActive]}
+                      onPress={() => setScore(s)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.scoreChipText, active && styles.scoreChipTextActive]}>
+                        {formatScore(s)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              {/* Review input */}
+              <Text style={styles.sectionLabel}>Resena (opcional)</Text>
+              <TextInput
+                style={styles.reviewInput}
+                placeholder="Que te parecio?"
+                placeholderTextColor="#555555"
+                value={review}
+                onChangeText={setReview}
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+
+              {/* Publish button */}
+              <TouchableOpacity
+                style={styles.publishBtn}
+                onPress={handlePublish}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.publishBtnText}>Publicar</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ─── Main screen ──────────────────────────────────────────────────────────────
+
+function ratingEntryToFeedRating(entry: RatingEntry): FeedRating {
+  return {
+    id: `local-${entry.id}`,
+    userId: 'me',
+    contentId: entry.contentId,
+    contentType: entry.contentType === 'podcast' ? 'track' : entry.contentType,
+    contentName: entry.contentName,
+    artistName: entry.artistName,
+    coverColor: '#A855F7',
+    coverInitial: entry.contentName.charAt(0).toUpperCase(),
+    score: entry.score,
+    review: entry.review,
+    likeCount: 0,
+    likedByMe: false,
+    createdAt: entry.createdAt,
+    user: {
+      displayName: 'Tu',
+      username: 'yo',
+      initials: 'YO',
+      avatarColor: '#A855F7',
+    },
+  };
+}
+
+function buildFeed(localRatings: RatingEntry[]): FeedRating[] {
+  const communityFeed: FeedRating[] = MOCK_RATINGS.map((r) => {
+    const u = getUserById(r.userId);
+    return {
+      ...r,
+      user: u
+        ? {
+            displayName: u.displayName,
+            username: u.username,
+            initials: u.initials,
+            avatarColor: u.avatarColor,
+          }
+        : { displayName: 'Usuario', username: 'user', initials: 'U', avatarColor: '#555555' },
+    };
+  });
+
+  const myFeed: FeedRating[] = localRatings.map(ratingEntryToFeedRating);
+
+  const all = [...myFeed, ...communityFeed];
+  all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return all;
+}
+
+export default function FeedScreen() {
+  const { ratings, loadRatings } = useRatingStore();
+  const [feed, setFeed] = useState<FeedRating[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
+  const [rateModalVisible, setRateModalVisible] = useState(false);
+  const [localLiked, setLocalLiked] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadRatings();
   }, []);
 
-  // Debounced Spotify search
   useEffect(() => {
-    if (!searchQuery.trim() || searchQuery.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    const timer = setTimeout(async () => {
-      if (!spotifyToken) return;
-      setIsSearching(true);
-      try {
-        const [trackData, albumData] = await Promise.all([
-          searchSpotify(spotifyToken, searchQuery, ['track'], 6),
-          searchSpotify(spotifyToken, searchQuery, ['album'], 4),
-        ]);
-        const tracks: SearchResult[] = (trackData?.tracks?.items ?? []).map((t: any) => ({
-          id: t.id,
-          name: t.name,
-          artist: t.artists?.[0]?.name ?? '',
-          imageUrl: t.album?.images?.[0]?.url ?? '',
-          type: 'track' as const,
-          album: t.album?.name ?? '',
-        }));
-        const albums: SearchResult[] = (albumData?.albums?.items ?? []).map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          artist: a.artists?.[0]?.name ?? '',
-          imageUrl: a.images?.[0]?.url ?? '',
-          type: 'album' as const,
-          album: a.name,
-        }));
-        setSearchResults([...tracks, ...albums].slice(0, 8));
-      } finally {
-        setIsSearching(false);
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  }, [searchQuery, spotifyToken]);
+    setFeed(buildFeed(ratings));
+  }, [ratings]);
 
-  const submitRating = async () => {
-    if (!selectedContent || !selectedEmoji) return;
-    const scoreMap: Record<EmojiType, number> = { love: 9, like: 7, meh: 4 };
-    await addRating({
-      contentId: selectedContent.id,
-      contentName: selectedContent.name,
-      artistName: selectedContent.artist,
-      imageUrl: selectedContent.imageUrl,
-      contentType: selectedContent.type,
-      score: scoreMap[selectedEmoji],
-      emoji: selectedEmoji,
-    });
-    setSelectedContent(null);
-    setSelectedEmoji(null);
-    setSearchQuery('');
-    setSearchResults([]);
-  };
-
-  const top = getTopRated(10);
-  const eloItems = getTopRated(2);
-  const showElo = eloItems.length >= 2;
-
-  return (
-    <ScrollView
-      style={styles.diarioScroll}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.diarioContent}
-      keyboardShouldPersistTaps="handled"
-    >
-      {/* No Spotify token banner */}
-      {!spotifyToken && (
-        <View style={styles.connectBanner}>
-          <Text style={styles.connectBannerText}>
-            Para buscar y calificar música, conecta Spotify desde la pantalla de login
-          </Text>
-          <TouchableOpacity
-            style={styles.connectBannerBtn}
-            onPress={() => router.replace('/(auth)/login')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.connectBannerBtnText}>Ir al login</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Search section */}
-      <View style={styles.searchWrapper}>
-        {spotifyToken ? (
-          <View style={styles.searchRow}>
-            <Ionicons name="search" size={18} color="#666666" style={styles.searchIcon} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Busca canciones o álbumes..."
-              placeholderTextColor="#666666"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-            />
-            {isSearching && (
-              <ActivityIndicator size="small" color="#A855F7" style={styles.searchSpinner} />
-            )}
-          </View>
-        ) : (
-          <View style={[styles.searchRow, styles.searchRowDisabled]}>
-            <Ionicons name="search" size={18} color="#444444" style={styles.searchIcon} />
-            <Text style={styles.searchDisabledText}>Conecta Spotify para buscar música</Text>
-          </View>
-        )}
-
-        {searchResults.length > 0 && (
-          <View style={styles.resultsBox}>
-            {searchResults.map((item) => {
-              const alreadyRated = !!getRatingForContent(item.id);
-              const fallbackColor = colorForId(item.id);
-              const initial = item.name.charAt(0).toUpperCase();
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.resultRow}
-                  onPress={() => {
-                    setSelectedContent(item);
-                    setSelectedEmoji(null);
-                    setSearchResults([]);
-                    setSearchQuery('');
-                  }}
-                  activeOpacity={0.7}
-                >
-                  {item.imageUrl ? (
-                    <Image source={{ uri: item.imageUrl }} style={styles.resultImage} />
-                  ) : (
-                    <View style={[styles.resultCircle, { backgroundColor: fallbackColor }]}>
-                      <Text style={styles.resultInitial}>{initial}</Text>
-                    </View>
-                  )}
-                  <View style={styles.resultInfo}>
-                    <View style={styles.resultNameRow}>
-                      <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
-                      {alreadyRated && (
-                        <Ionicons name="checkmark-circle" size={14} color="#A855F7" style={{ marginLeft: 4 }} />
-                      )}
-                    </View>
-                    <Text style={styles.resultMeta} numberOfLines={1}>
-                      {item.artist} · {item.type === 'track' ? 'Canción' : 'Álbum'}
-                    </Text>
-                  </View>
-                  <View style={styles.resultAdd}>
-                    <Text style={styles.resultAddText}>+</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      {/* Selected content rating */}
-      {selectedContent && (
-        <View style={styles.selectedSection}>
-          <View style={styles.selectedHeader}>
-            {selectedContent.imageUrl ? (
-              <Image source={{ uri: selectedContent.imageUrl }} style={styles.selectedImage} />
-            ) : (
-              <View style={[styles.selectedCircle, { backgroundColor: colorForId(selectedContent.id) }]}>
-                <Text style={styles.selectedInitial}>{selectedContent.name.charAt(0).toUpperCase()}</Text>
-              </View>
-            )}
-            <View style={styles.selectedInfo}>
-              <Text style={styles.selectedName} numberOfLines={1}>{selectedContent.name}</Text>
-              <Text style={styles.selectedMeta} numberOfLines={1}>{selectedContent.artist}</Text>
-            </View>
-          </View>
-
-          <View style={styles.moodRow}>
-            {(
-              [
-                { key: 'love' as EmojiType, label: '🔥 Me encantó' },
-                { key: 'like' as EmojiType, label: '😊 Estuvo bien' },
-                { key: 'meh' as EmojiType, label: '😞 No fue lo mío' },
-              ]
-            ).map(({ key, label }) => (
-              <TouchableOpacity
-                key={key}
-                style={[styles.moodBtn, selectedEmoji === key && styles.moodBtnActive]}
-                onPress={() => setSelectedEmoji(key)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.moodBtnText}>{label}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[styles.saveBtn, !selectedEmoji && styles.saveBtnDisabled]}
-            onPress={submitRating}
-            disabled={!selectedEmoji}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.saveBtnText}>Guardar calificación</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Elo comparison */}
-      {showElo && (
-        <View style={styles.eloSection}>
-          <Text style={styles.eloTitle}>¿CUÁL PREFIERES?</Text>
-          <View style={styles.eloRow}>
-            {([
-              { item: eloItems[0], side: 'left' as EloChoice },
-              { item: eloItems[1], side: 'right' as EloChoice },
-            ]).map(({ item, side }) => {
-              const fallbackColor = colorForId(item.id);
-              const initial = item.contentName.charAt(0).toUpperCase();
-              return (
-                <TouchableOpacity
-                  key={side}
-                  style={[
-                    styles.eloCard,
-                    { backgroundColor: fallbackColor + '33' },
-                    eloChoice === side && styles.eloCardActive,
-                  ]}
-                  onPress={() => setEloChoice(side)}
-                  activeOpacity={0.8}
-                >
-                  {item.imageUrl ? (
-                    <Image source={{ uri: item.imageUrl }} style={styles.eloImage} />
-                  ) : (
-                    <Text style={styles.eloInitial}>{initial}</Text>
-                  )}
-                  <Text style={styles.eloName} numberOfLines={2}>{item.contentName}</Text>
-                  <Text style={styles.eloArtist}>{item.artistName}</Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      )}
-
-      {/* Top calificaciones */}
-      <View style={styles.topSection}>
-        <Text style={styles.topTitle}>TU TOP CALIFICACIONES</Text>
-        {top.length === 0 ? (
-          <Text style={styles.topEmpty}>Aún no calificaste nada · busca una canción arriba</Text>
-        ) : (
-          top.map((item, index) => {
-            const rank = String(index + 1).padStart(2, '0');
-            const fallbackColor = colorForId(item.id);
-            const initial = item.contentName.charAt(0).toUpperCase();
-            return (
-              <View key={item.id} style={styles.topRow}>
-                <Text style={styles.topRank}>{rank}</Text>
-                {item.imageUrl ? (
-                  <Image source={{ uri: item.imageUrl }} style={styles.topImage} />
-                ) : (
-                  <View style={[styles.topCircle, { backgroundColor: fallbackColor }]}>
-                    <Text style={styles.topInitial}>{initial}</Text>
-                  </View>
-                )}
-                <View style={styles.topInfo}>
-                  <Text style={styles.topName} numberOfLines={1}>{item.contentName}</Text>
-                  <Text style={styles.topArtist} numberOfLines={1}>{item.artistName}</Text>
-                </View>
-                <Text style={styles.topScore}>{item.score.toFixed(1)}</Text>
-              </View>
-            );
-          })
-        )}
-      </View>
-    </ScrollView>
-  );
-}
-
-export default function FeedScreen() {
-  const { feed, loadingFeed, fetchFeed } = useMusicStore();
-  const [activeTab, setActiveTab] = useState<MainTab>('feed');
-  const [rateModalVisible, setRateModalVisible] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-
-  useEffect(() => {
-    fetchFeed();
-  }, []);
-
-  const onRefresh = async () => {
+  const handleRefresh = async () => {
     setRefreshing(true);
-    await fetchFeed();
+    await loadRatings();
     setRefreshing(false);
   };
 
-  const renderItem = ({ item }: { item: FeedItem }) => {
-    if (item.type === 'rating' && item.rating) {
-      return <FeedRatingCard rating={item.rating} user={item.user} />;
-    }
-    return null;
+  const toggleLike = (id: string) => {
+    setLocalLiked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
+
+  const renderItem = ({ item }: { item: FeedRating }) => (
+    <FeedCard
+      item={item}
+      liked={localLiked.has(item.id) ? !item.likedByMe : item.likedByMe}
+      onToggleLike={toggleLike}
+    />
+  );
+
+  const ListEmpty = () => (
+    <View style={styles.empty}>
+      <Ionicons name="musical-notes-outline" size={56} color="#2A2A2A" />
+      <Text style={styles.emptyTitle}>El feed esta vacio</Text>
+      <Text style={styles.emptySubtitle}>
+        Sigue a gente con tu mismo gusto musical para ver sus calificaciones
+      </Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
+      {/* Fixed header */}
       <View style={styles.header}>
         <Text style={styles.logo}>Sonet</Text>
-        <Ionicons name="notifications-outline" size={22} color="#666666" />
-      </View>
-
-      {/* Segment control */}
-      <View style={styles.segmentRow}>
-        <TouchableOpacity
-          style={[styles.segment, activeTab === 'feed' && styles.segmentActive]}
-          onPress={() => setActiveTab('feed')}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.segmentText, activeTab === 'feed' && styles.segmentTextActive]}>
-            Feed
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.segment, activeTab === 'diario' && styles.segmentActive]}
-          onPress={() => setActiveTab('diario')}
-          activeOpacity={0.7}
-        >
-          <Text
-            style={[styles.segmentText, activeTab === 'diario' && styles.segmentTextActive]}
-          >
-            Diario
-          </Text>
+        <TouchableOpacity activeOpacity={0.7} hitSlop={12}>
+          <Ionicons name="bell-outline" size={22} color="#666666" />
         </TouchableOpacity>
       </View>
 
-      {activeTab === 'feed' && (
-        <>
-          <FlatList
-            data={feed}
-            keyExtractor={(item) => item.id}
-            renderItem={renderItem}
-            ListHeaderComponent={<SongOfTheDay />}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing || loadingFeed}
-                onRefresh={onRefresh}
-                tintColor={Colors.primary}
-              />
-            }
-            ListEmptyComponent={
-              !loadingFeed ? (
-                <View style={styles.empty}>
-                  <Text style={styles.emptyEmoji}>🎶</Text>
-                  <Text style={styles.emptyTitle}>El feed está vacío</Text>
-                  <Text style={styles.emptySubtitle}>
-                    Sigue a gente con tu mismo gusto musical para ver sus calificaciones
-                  </Text>
-                </View>
-              ) : null
-            }
-            contentContainerStyle={feed.length === 0 ? styles.emptyContainer : styles.listContent}
-            showsVerticalScrollIndicator={false}
+      {/* Feed */}
+      <FlatList
+        data={feed}
+        keyExtractor={(item) => item.id}
+        renderItem={renderItem}
+        ListEmptyComponent={<ListEmpty />}
+        contentContainerStyle={feed.length === 0 ? styles.emptyContainer : styles.listContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#A855F7"
           />
-          <RateModal visible={rateModalVisible} onClose={() => setRateModalVisible(false)} />
-        </>
-      )}
+        }
+      />
 
-      {activeTab === 'diario' && <DiarioTab />}
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setRateModalVisible(true)}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="add" size={28} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      {/* Rate modal */}
+      <RateModal
+        visible={rateModalVisible}
+        onClose={() => setRateModalVisible(false)}
+      />
     </SafeAreaView>
   );
 }
 
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0D0D0D' },
+  container: {
+    flex: 1,
+    backgroundColor: '#0D0D0D',
+  },
 
   // Header
   header: {
@@ -430,72 +478,217 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: Spacing.md,
+    paddingVertical: 14,
     borderBottomWidth: 1,
     borderBottomColor: '#2A2A2A',
   },
-  logo: { fontSize: 22, fontWeight: '700', color: '#FFFFFF' },
-
-  // Segment control
-  segmentRow: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginTop: 12,
-    marginBottom: 8,
-    backgroundColor: '#1A1A1A',
-    borderRadius: 10,
-    padding: 3,
+  logo: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#A855F7',
   },
-  segment: {
-    flex: 1,
+
+  // List
+  listContent: {
     paddingVertical: 8,
-    borderRadius: 8,
-    alignItems: 'center',
+    paddingBottom: 100,
   },
-  segmentActive: { backgroundColor: '#A855F7' },
-  segmentText: { color: '#A0A0A0', fontWeight: '600', fontSize: 14 },
-  segmentTextActive: { color: '#FFFFFF' },
-
-  // Feed
-  listContent: { paddingVertical: Spacing.sm },
-  emptyContainer: { flex: 1 },
+  emptyContainer: {
+    flex: 1,
+  },
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: Spacing.xxl,
-    gap: Spacing.md,
-  },
-  emptyEmoji: { fontSize: 56 },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
-  emptySubtitle: { fontSize: 14, color: '#A0A0A0', textAlign: 'center', lineHeight: 20 },
-
-  // Diario
-  diarioScroll: { flex: 1 },
-  diarioContent: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 8 },
-
-  // Connect Spotify banner
-  connectBanner: {
-    backgroundColor: '#1A0A2E',
-    borderWidth: 1,
-    borderColor: '#A855F7',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 16,
+    padding: 40,
     gap: 12,
+    marginTop: 80,
   },
-  connectBannerText: { color: '#A0A0A0', fontSize: 13, lineHeight: 18 },
-  connectBannerBtn: {
-    backgroundColor: '#A855F7',
-    borderRadius: 10,
-    paddingVertical: 10,
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#666666',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+
+  // Card
+  card: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
+    marginHorizontal: 16,
+    marginVertical: 6,
+    padding: 16,
+  },
+  cardRow: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  connectBannerBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+  contentRow: {
+    marginTop: 12,
+    alignItems: 'flex-start',
+  },
+
+  // Avatar
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  avatarText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // User meta
+  userCol: {
+    flex: 1,
+  },
+  displayName: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  userMeta: {
+    color: '#666666',
+    fontSize: 13,
+    marginTop: 1,
+  },
+
+  // Cover
+  cover: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  coverInitial: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 18,
+  },
+
+  // Content info
+  contentCol: {
+    flex: 1,
+  },
+  contentName: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  artistName: {
+    color: '#888888',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  contentType: {
+    color: '#555555',
+    fontSize: 11,
+    marginTop: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  // Score badge
+  scoreBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  scoreText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+
+  // Review
+  review: {
+    color: '#888888',
+    fontSize: 14,
+    fontStyle: 'italic',
+    marginTop: 10,
+    lineHeight: 20,
+  },
+
+  // Actions
+  actionsRow: {
+    flexDirection: 'row',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#242424',
+  },
+  likeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  likeCount: {
+    color: '#666666',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  likeCountActive: {
+    color: '#F43F5E',
+  },
+
+  // FAB
+  fab: {
+    position: 'absolute',
+    bottom: 100,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#A855F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#A855F7',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+
+  // Modal
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#0D0D0D',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2A2A2A',
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 18,
+  },
+  modalScroll: {
+    flex: 1,
+  },
 
   // Search
-  searchWrapper: { marginBottom: 20 },
-  searchRow: {
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#1A1A1A',
@@ -504,59 +697,73 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     height: 48,
     paddingHorizontal: 14,
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 10,
   },
-  searchRowDisabled: { opacity: 0.5 },
-  searchIcon: { marginRight: 10 },
-  searchInput: { flex: 1, color: '#FFFFFF', fontSize: 15 },
-  searchDisabledText: { flex: 1, color: '#444444', fontSize: 15 },
-  searchSpinner: { marginLeft: 8 },
-  resultsBox: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-    marginTop: 4,
-    overflow: 'hidden',
+  searchInput: {
+    flex: 1,
+    color: '#FFFFFF',
+    fontSize: 15,
   },
-  resultRow: {
+  sectionLabel: {
+    color: '#555555',
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 8,
+  },
+
+  // Catalog rows
+  catalogRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
+    borderBottomColor: '#1A1A1A',
   },
-  resultImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 8,
-    marginRight: 12,
-  },
-  resultCircle: {
-    width: 50,
-    height: 50,
+  catalogCover: {
+    width: 44,
+    height: 44,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
   },
-  resultInitial: { color: '#FFFFFF', fontWeight: '800', fontSize: 18 },
-  resultInfo: { flex: 1 },
-  resultNameRow: { flexDirection: 'row', alignItems: 'center' },
-  resultName: { color: '#FFFFFF', fontWeight: '700', fontSize: 14, flexShrink: 1 },
-  resultMeta: { color: '#666666', fontSize: 12, marginTop: 2 },
-  resultAdd: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-  resultAddText: { color: '#A855F7', fontSize: 22, fontWeight: '300' },
+  catalogInitial: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  catalogInfo: {
+    flex: 1,
+  },
+  catalogName: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  catalogArtist: {
+    color: '#666666',
+    fontSize: 12,
+    marginTop: 2,
+  },
 
-  // Selected content
-  selectedSection: { marginBottom: 24 },
-  selectedHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
-  selectedImage: {
-    width: 52,
-    height: 52,
-    borderRadius: 10,
-    marginRight: 12,
+  // Selected item
+  selectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 16,
+    padding: 14,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 12,
   },
-  selectedCircle: {
+  selectedCover: {
     width: 52,
     height: 52,
     borderRadius: 10,
@@ -564,97 +771,98 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 12,
   },
-  selectedInitial: { color: '#FFFFFF', fontWeight: '800', fontSize: 20 },
-  selectedInfo: { flex: 1 },
-  selectedName: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
-  selectedMeta: { color: '#666666', fontSize: 13, marginTop: 2 },
-  moodRow: { flexDirection: 'column', gap: 8 },
-  moodBtn: {
+  selectedInitial: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 20,
+  },
+  selectedInfo: {
+    flex: 1,
+  },
+  selectedName: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  selectedArtist: {
+    color: '#888888',
+    fontSize: 13,
+    marginTop: 2,
+  },
+
+  // Score display
+  scoreDisplay: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+    marginTop: 24,
+    gap: 6,
+  },
+  scoreNumber: {
+    fontSize: 48,
+    fontWeight: '800',
+  },
+  scoreLabel: {
+    fontSize: 22,
+    color: '#444444',
+    fontWeight: '600',
+  },
+
+  // Score picker
+  scorePicker: {
+    marginTop: 16,
+  },
+  scorePickerContent: {
+    paddingHorizontal: 20,
+    gap: 8,
+  },
+  scoreChip: {
+    width: 52,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#2A2A2A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreChipActive: {
+    backgroundColor: '#A855F7',
+  },
+  scoreChipText: {
+    color: '#888888',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  scoreChipTextActive: {
+    color: '#FFFFFF',
+  },
+
+  // Review input
+  reviewInput: {
     backgroundColor: '#1A1A1A',
     borderWidth: 1,
     borderColor: '#2A2A2A',
     borderRadius: 12,
     padding: 14,
-    alignItems: 'center',
+    color: '#FFFFFF',
+    fontSize: 14,
+    marginHorizontal: 20,
+    minHeight: 90,
+    lineHeight: 20,
   },
-  moodBtnActive: { backgroundColor: '#1A0A2E', borderColor: '#A855F7' },
-  moodBtnText: { color: '#FFFFFF', fontSize: 14, textAlign: 'center' },
-  saveBtn: {
-    marginTop: 12,
+
+  // Publish button
+  publishBtn: {
     backgroundColor: '#A855F7',
     borderRadius: 12,
-    paddingVertical: 14,
+    paddingVertical: 16,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 40,
     alignItems: 'center',
   },
-  saveBtnDisabled: { backgroundColor: '#3D1A6B', opacity: 0.5 },
-  saveBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
-
-  // Elo comparison
-  eloSection: { marginBottom: 28 },
-  eloTitle: {
-    fontSize: 11,
-    color: '#666666',
-    fontWeight: '600',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-    marginBottom: 12,
+  publishBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
   },
-  eloRow: { flexDirection: 'row', gap: 12 },
-  eloCard: {
-    flex: 1,
-    aspectRatio: 1,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderWidth: 2,
-    borderColor: 'transparent',
-  },
-  eloCardActive: { borderColor: '#A855F7', borderWidth: 3 },
-  eloImage: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  eloInitial: { color: '#FFFFFF', fontSize: 36, fontWeight: '900', marginBottom: 8 },
-  eloName: { color: '#FFFFFF', fontWeight: '700', fontSize: 13, textAlign: 'center' },
-  eloArtist: { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 4, textAlign: 'center' },
-
-  // Top ratings
-  topSection: { marginBottom: 8 },
-  topTitle: {
-    fontSize: 11,
-    color: '#666666',
-    fontWeight: '600',
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-    marginBottom: 14,
-  },
-  topEmpty: { color: '#666666', fontSize: 13, textAlign: 'center', paddingVertical: 24 },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  topRank: { color: '#666666', fontWeight: '700', fontSize: 14, width: 28 },
-  topImage: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-    marginRight: 12,
-  },
-  topCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  topInitial: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
-  topInfo: { flex: 1 },
-  topName: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
-  topArtist: { color: '#666666', fontSize: 12, marginTop: 2 },
-  topScore: { color: '#A855F7', fontWeight: '700', fontSize: 15 },
 });

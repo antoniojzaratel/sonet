@@ -1,12 +1,12 @@
 -- ============================================================
--- SONET — Full Database Schema
--- Run this in Supabase SQL Editor
+-- SONET — Full Database Schema (canonical, consolidated)
+-- Run this in Supabase SQL Editor. Supersedes schema_v2.sql,
+-- which has been retired — see git history if you need it.
 -- ============================================================
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";   -- fuzzy text search
-CREATE EXTENSION IF NOT EXISTS "vector";    -- pgvector for embeddings
 
 -- ============================================================
 -- USERS & AUTH
@@ -22,13 +22,23 @@ CREATE TABLE IF NOT EXISTS users (
   country         TEXT,
   spotify_id      TEXT UNIQUE,
   apple_music_id  TEXT UNIQUE,
-  spotify_token   TEXT,
-  spotify_refresh TEXT,
   onboarding_complete BOOLEAN DEFAULT FALSE,
   followers_count INT DEFAULT 0,
   following_count INT DEFAULT 0,
   ratings_count   INT DEFAULT 0,
   created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- OAuth tokens live here, NOT on `users` — `users` is publicly readable
+-- (see users_read_all policy below) so a plaintext token column on it
+-- would leak every user's Spotify credentials to every other user.
+CREATE TABLE IF NOT EXISTS user_secrets (
+  user_id         UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  spotify_token   TEXT,
+  spotify_refresh TEXT,
+  spotify_token_expires_at TIMESTAMPTZ,
+  apple_music_token TEXT,
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS follows (
@@ -182,7 +192,7 @@ CREATE TABLE IF NOT EXISTS catalog_music_videos (
 );
 
 -- ============================================================
--- RATINGS
+-- RATINGS — with no-ties forced ranking
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS ratings (
@@ -195,18 +205,41 @@ CREATE TABLE IF NOT EXISTS ratings (
   artist_name     TEXT NOT NULL,
   album_name      TEXT,
   score           FLOAT NOT NULL CHECK (score >= 1.0 AND score <= 10.0),
+  -- Strict rank order within (user_id, content_type). Lower = better (1 is #1).
+  -- Never has ties — see lib/ranking.ts, which performs the pairwise
+  -- comparison insert that assigns this on every new rating.
+  rank_position   INT NOT NULL,
+  bucket          TEXT NOT NULL CHECK (bucket IN ('liked','fine','disliked')),
   review          TEXT,
   liked           BOOLEAN DEFAULT FALSE,
   play_count      INT DEFAULT 1,
   last_played     TIMESTAMPTZ,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (user_id, content_id, content_type)
+  UNIQUE (user_id, content_id, content_type),
+  -- Deferred so a single multi-row upsert can renumber a whole list
+  -- (e.g. swap two positions) without tripping over itself mid-statement.
+  UNIQUE (user_id, content_type, rank_position) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX idx_ratings_user_id ON ratings(user_id);
 CREATE INDEX idx_ratings_content_id ON ratings(content_id);
 CREATE INDEX idx_ratings_score ON ratings(score DESC);
 CREATE INDEX idx_ratings_created ON ratings(created_at DESC);
+CREATE INDEX idx_ratings_user_type_rank ON ratings(user_id, content_type, rank_position);
+
+-- Log of individual pairwise duels ("this or that") so a ranking insert
+-- can be explained/undone. Not required to read the current order —
+-- that's just ratings.rank_position — this is an audit trail.
+CREATE TABLE IF NOT EXISTS rating_duels (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content_type    TEXT NOT NULL,
+  winner_content_id TEXT NOT NULL,
+  loser_content_id  TEXT NOT NULL,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_rating_duels_user ON rating_duels(user_id, content_type);
 
 -- ============================================================
 -- EVENTS (User-Generated)
@@ -266,70 +299,39 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX idx_messages_conversation ON messages(conversation_id, created_at DESC);
 
 -- ============================================================
--- AI — MUSIC DNA (User Taste Vector)
+-- AI — MUSIC PROFILES (22-dim taste vector, matches lib/ai/tasteVector.ts)
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS music_dna (
-  user_id               UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-
-  -- pgvector embedding (256-dim) for fast cosine similarity search
-  embedding             vector(256),
-
-  -- Genre breakdown (top 10 genres with weights 0–1)
-  top_genres            JSONB,    -- [{"genre":"rock","weight":0.82}, ...]
-
-  -- Spotify audio feature averages
-  avg_bpm               FLOAT,
-  avg_energy            FLOAT,
-  avg_valence           FLOAT,
-  avg_danceability      FLOAT,
-  avg_acousticness      FLOAT,
-  avg_instrumentalness  FLOAT,
-  avg_loudness          FLOAT,
-  avg_speechiness       FLOAT,
-
-  -- Behavioral signals
-  listening_peak_hour   INT,      -- 0–23
-  avg_track_duration_s  FLOAT,
-  skip_rate             FLOAT,    -- 0–1
-  repeat_rate           FLOAT,    -- 0–1
-  discovery_rate        FLOAT,    -- how much new music vs familiar
-
-  -- Cultural signals
-  top_languages         JSONB,    -- [{"lang":"es","weight":0.60}, ...]
-  top_eras              JSONB,    -- [{"decade":"2010s","weight":0.45}, ...]
-  top_artists           JSONB,    -- top 20 artists with play_count
-  top_tracks            JSONB,    -- top 50 track IDs for similarity lookup
-
-  -- Metadata
-  total_tracks_analyzed INT DEFAULT 0,
-  computed_at           TIMESTAMPTZ DEFAULT NOW(),
-  spotify_synced_at     TIMESTAMPTZ
+CREATE TABLE IF NOT EXISTS music_profiles (
+  user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  feature_vector    JSONB,        -- MusicVector object (22 dimensions)
+  top_genres        JSONB,        -- [{genre, percentage, color}]
+  top_artists       JSONB,        -- [{id, name, image_url, play_count}]
+  avg_bpm           FLOAT,
+  energy_level      FLOAT,
+  danceability      FLOAT,
+  valence           FLOAT,
+  listening_hours   FLOAT,
+  spotify_synced_at TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Fast ANN search on embeddings
-CREATE INDEX idx_music_dna_embedding ON music_dna USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-
 -- ============================================================
--- AI — COMPATIBILITY SCORES (Precomputed SVM output)
+-- AI — COMPATIBILITY SCORES (cache of lib/ai/matchEngine.ts output)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS compatibility_scores (
   user_a          UUID REFERENCES users(id) ON DELETE CASCADE,
   user_b          UUID REFERENCES users(id) ON DELETE CASCADE,
 
-  -- Overall SVM probability output (0–100)
-  taste_score     FLOAT NOT NULL,
+  taste_score     FLOAT NOT NULL,   -- 0-100 composite, matchEngine.ts sigmoid output
 
-  -- Dimension breakdown
-  rhythm_match    FLOAT,   -- BPM + energy + danceability similarity
-  mood_match      FLOAT,   -- valence + acousticness similarity
-  era_match       FLOAT,   -- decade overlap
-  language_match  FLOAT,   -- language overlap
-  genre_match     FLOAT,   -- genre vector cosine similarity
-  discovery_match FLOAT,   -- both explorers or both loyalists
+  -- Dimension breakdown, matches matchEngine.ts's actual return shape
+  audio_score     FLOAT,   -- weighted cosine similarity over audio-feature dims
+  genre_score     FLOAT,   -- genre-vector overlap
+  behavior_score  FLOAT,   -- rating/behavior similarity
 
-  -- Shared content
   shared_genres   TEXT[],
   shared_artists  TEXT[],
   common_ratings  INT DEFAULT 0,   -- tracks both rated >= 7
@@ -356,23 +358,21 @@ CREATE TABLE IF NOT EXISTS daily_recommendations (
   cover_image   TEXT,
   preview_url   TEXT,
 
-  -- Scoring breakdown (0–1 each)
-  content_score       FLOAT,  -- cosine similarity to user DNA
+  -- Scoring breakdown (0–1 each), matches lib/ai/recommendations.ts
+  content_score       FLOAT,  -- cosine similarity to user vector
   collab_score        FLOAT,  -- liked by taste-match users
-  novelty_score       FLOAT,  -- not in user history
+  novelty_score        FLOAT,  -- not in user history
   trending_score      FLOAT,  -- rising in user's genre this week
   final_score         FLOAT,  -- weighted composite
+  confidence          INT,    -- 55-99, human-readable version of final_score
 
-  -- Human-readable explanation
   reason        TEXT,         -- "Your top match @carlos92 also loves this"
   reason_type   TEXT,         -- 'taste_match' | 'genre_fit' | 'trending' | 'discovery'
 
-  -- User feedback
   reacted       BOOLEAN DEFAULT FALSE,
   reaction      TEXT CHECK (reaction IN ('loved','liked','skip','save_playlist')),
   reacted_at    TIMESTAMPTZ,
 
-  -- Audio features of the recommended track (for UI display)
   bpm           FLOAT,
   energy        FLOAT,
   valence       FLOAT,
@@ -382,7 +382,6 @@ CREATE TABLE IF NOT EXISTS daily_recommendations (
 
 CREATE INDEX idx_daily_recs_user ON daily_recommendations(user_id, date DESC);
 
--- Feedback log for model retraining
 CREATE TABLE IF NOT EXISTS recommendation_feedback (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -393,19 +392,20 @@ CREATE TABLE IF NOT EXISTS recommendation_feedback (
 );
 
 -- ============================================================
--- SOUNDMATCH — Musical Dating Feature
+-- SOUNDMATCH — Musical Dating / Friends Feature (blind profile)
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS soundmatch_profiles (
   user_id           UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  active            BOOLEAN DEFAULT TRUE,
+  -- active = false is the "off — just recommendations, not even friends" state.
+  active            BOOLEAN DEFAULT FALSE,
   age               INT,
   age_min           INT DEFAULT 18,
   age_max           INT DEFAULT 45,
   location_radius_km INT DEFAULT 50,
   looking_for       TEXT[] DEFAULT ARRAY['concert_buddy'],  -- 'friendship','dating','concert_buddy'
   gender            TEXT,
-  gender_preference TEXT[] DEFAULT ARRAY['any'],
+  gender_preference TEXT[] DEFAULT ARRAY['both'],  -- 'men','women','both'
   show_distance     BOOLEAN DEFAULT TRUE,
   show_age          BOOLEAN DEFAULT TRUE,
   last_active       TIMESTAMPTZ DEFAULT NOW(),
@@ -434,6 +434,55 @@ CREATE TABLE IF NOT EXISTS soundmatch_matches (
 
 CREATE INDEX idx_soundmatch_matches_user_a ON soundmatch_matches(user_a);
 CREATE INDEX idx_soundmatch_matches_user_b ON soundmatch_matches(user_b);
+
+-- ============================================================
+-- GAMES — Daily guess game (Wordle-style)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS daily_game_puzzles (
+  date            DATE PRIMARY KEY,
+  content_type    TEXT NOT NULL CHECK (content_type IN ('genre','artist','album','song')),
+  -- The answer columns are intentionally NOT covered by a public-read
+  -- policy — clients never select them directly. Guess checking goes
+  -- through check_daily_guess() below so the answer can't be read off
+  -- the wire before someone solves it.
+  answer_id       TEXT NOT NULL,
+  answer_name     TEXT NOT NULL,
+  hints           JSONB NOT NULL DEFAULT '[]',  -- progressive hints, revealed by attempt count
+  cover_image     TEXT,
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS game_attempts (
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date            DATE NOT NULL,
+  guesses         JSONB NOT NULL DEFAULT '[]',  -- ["guess text", ...] in order
+  solved          BOOLEAN DEFAULT FALSE,
+  attempt_count   INT DEFAULT 0,
+  streak          INT DEFAULT 0,
+  updated_at      TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (user_id, date)
+);
+
+-- Server-side guess check so the answer never round-trips to the client
+-- until it's actually solved (or the reveal is explicitly requested).
+CREATE OR REPLACE FUNCTION check_daily_guess(p_date DATE, p_guess TEXT)
+RETURNS TABLE (correct BOOLEAN, answer_name TEXT) AS $$
+DECLARE
+  v_answer_id   TEXT;
+  v_answer_name TEXT;
+  v_correct     BOOLEAN;
+BEGIN
+  SELECT answer_id, daily_game_puzzles.answer_name
+  INTO v_answer_id, v_answer_name
+  FROM daily_game_puzzles WHERE date = p_date;
+
+  v_correct := v_answer_id IS NOT NULL AND lower(trim(p_guess)) = lower(trim(v_answer_id))
+               OR (v_answer_name IS NOT NULL AND lower(trim(p_guess)) = lower(trim(v_answer_name)));
+
+  RETURN QUERY SELECT v_correct, CASE WHEN v_correct THEN v_answer_name ELSE NULL END;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ============================================================
 -- NOTIFICATIONS
@@ -474,7 +523,6 @@ CREATE INDEX idx_listening_history_track ON listening_history(track_id);
 -- FUNCTIONS & TRIGGERS
 -- ============================================================
 
--- Increment/decrement follower counts
 CREATE OR REPLACE FUNCTION update_follow_counts()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -493,7 +541,6 @@ CREATE TRIGGER trigger_follow_counts
 AFTER INSERT OR DELETE ON follows
 FOR EACH ROW EXECUTE FUNCTION update_follow_counts();
 
--- Increment rating count on new rating
 CREATE OR REPLACE FUNCTION update_rating_count()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -510,7 +557,6 @@ CREATE TRIGGER trigger_rating_count
 AFTER INSERT OR DELETE ON ratings
 FOR EACH ROW EXECUTE FUNCTION update_rating_count();
 
--- Increment event attendees
 CREATE OR REPLACE FUNCTION increment_event_attendees(event_id UUID)
 RETURNS VOID AS $$
 BEGIN
@@ -518,13 +564,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Detect SoundMatch mutual likes and create match
+-- Detect SoundMatch mutual likes and create match (real taste_score, not stubbed)
 CREATE OR REPLACE FUNCTION check_soundmatch_mutual()
 RETURNS TRIGGER AS $$
 DECLARE
   v_conv_id UUID;
   v_score   FLOAT;
-  v_icebreaker TEXT;
 BEGIN
   IF NEW.action IN ('like', 'super_like') THEN
     IF EXISTS (
@@ -533,17 +578,14 @@ BEGIN
         AND target_id = NEW.swiper_id
         AND action IN ('like', 'super_like')
     ) THEN
-      -- Create conversation
       INSERT INTO conversations (participants)
       VALUES (ARRAY[NEW.swiper_id, NEW.target_id])
       RETURNING id INTO v_conv_id;
 
-      -- Get compatibility score
       SELECT taste_score INTO v_score
       FROM compatibility_scores
       WHERE (user_a = LEAST(NEW.swiper_id, NEW.target_id) AND user_b = GREATEST(NEW.swiper_id, NEW.target_id));
 
-      -- Store match (canonical order)
       INSERT INTO soundmatch_matches (user_a, user_b, taste_score, conversation_id, icebreaker)
       VALUES (
         LEAST(NEW.swiper_id, NEW.target_id),
@@ -554,7 +596,6 @@ BEGIN
       )
       ON CONFLICT DO NOTHING;
 
-      -- Notify both users
       INSERT INTO notifications (user_id, type, actor_id, content)
       VALUES
         (NEW.swiper_id, 'soundmatch_match', NEW.target_id, '¡Nuevo SoundMatch! Empiecen a hablar 🎵'),
@@ -569,7 +610,6 @@ CREATE TRIGGER trigger_soundmatch_mutual
 AFTER INSERT ON soundmatch_swipes
 FOR EACH ROW EXECUTE FUNCTION check_soundmatch_mutual();
 
--- Auto-update conversations.updated_at on new message
 CREATE OR REPLACE FUNCTION update_conversation_timestamp()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -587,26 +627,36 @@ FOR EACH ROW EXECUTE FUNCTION update_conversation_timestamp();
 -- ============================================================
 
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rating_duels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE music_dna ENABLE ROW LEVEL SECURITY;
+ALTER TABLE music_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compatibility_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE soundmatch_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE soundmatch_swipes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE soundmatch_matches ENABLE ROW LEVEL SECURITY;
+ALTER TABLE daily_game_puzzles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE game_attempts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE listening_history ENABLE ROW LEVEL SECURITY;
 
--- Users: anyone can read profiles, only owner can update
+-- Users: anyone can read profiles, only owner can update. No secrets live here.
 CREATE POLICY "users_read_all" ON users FOR SELECT USING (true);
 CREATE POLICY "users_update_own" ON users FOR UPDATE USING (auth.uid() = id);
 CREATE POLICY "users_insert_own" ON users FOR INSERT WITH CHECK (auth.uid() = id);
 
--- Ratings: public reads, own writes
+-- Secrets: owner only, full stop.
+CREATE POLICY "user_secrets_owner" ON user_secrets FOR ALL USING (auth.uid() = user_id);
+
+-- Ratings: public reads (needed for feed/profile/taste-match), own writes
 CREATE POLICY "ratings_read_all" ON ratings FOR SELECT USING (true);
 CREATE POLICY "ratings_write_own" ON ratings FOR ALL USING (auth.uid() = user_id);
+
+CREATE POLICY "rating_duels_own" ON rating_duels FOR ALL USING (auth.uid() = user_id);
 
 -- Events: public reads, own writes
 CREATE POLICY "events_read_all" ON events FOR SELECT USING (true);
@@ -622,14 +672,19 @@ CREATE POLICY "messages_participants" ON messages FOR ALL
     SELECT 1 FROM conversations WHERE id = conversation_id AND auth.uid() = ANY(participants)
   ));
 
--- Music DNA: owner + service role
-CREATE POLICY "music_dna_owner" ON music_dna FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "music_dna_service" ON music_dna FOR ALL USING (auth.role() = 'service_role');
+-- Music profiles: public read (client-side matching needs to compare vectors), owner writes
+CREATE POLICY "music_profiles_read_all" ON music_profiles FOR SELECT USING (true);
+CREATE POLICY "music_profiles_own" ON music_profiles FOR ALL USING (auth.uid() = user_id);
+
+CREATE POLICY "compat_scores_participant" ON compatibility_scores FOR SELECT
+  USING (auth.uid() = user_a OR auth.uid() = user_b);
+CREATE POLICY "compat_scores_write" ON compatibility_scores FOR INSERT
+  WITH CHECK (auth.uid() = user_a OR auth.uid() = user_b);
+CREATE POLICY "compat_scores_update" ON compatibility_scores FOR UPDATE
+  USING (auth.uid() = user_a OR auth.uid() = user_b);
 
 -- Daily recs: owner only
-CREATE POLICY "daily_recs_owner" ON daily_recommendations FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "daily_recs_update" ON daily_recommendations FOR UPDATE USING (auth.uid() = user_id);
-CREATE POLICY "daily_recs_service" ON daily_recommendations FOR INSERT USING (auth.role() = 'service_role');
+CREATE POLICY "daily_recs_owner" ON daily_recommendations FOR ALL USING (auth.uid() = user_id);
 
 -- SoundMatch: active profiles visible to all SoundMatch users
 CREATE POLICY "soundmatch_read_active" ON soundmatch_profiles FOR SELECT USING (active = true);
@@ -639,23 +694,27 @@ CREATE POLICY "swipes_own" ON soundmatch_swipes FOR ALL USING (auth.uid() = swip
 CREATE POLICY "matches_participant" ON soundmatch_matches FOR SELECT
   USING (auth.uid() = user_a OR auth.uid() = user_b);
 
+-- Games: hints/metadata public, answer columns are never selected by
+-- clients directly (enforced at the app layer + check_daily_guess()).
+CREATE POLICY "puzzles_read_all" ON daily_game_puzzles FOR SELECT USING (true);
+CREATE POLICY "game_attempts_own" ON game_attempts FOR ALL USING (auth.uid() = user_id);
+
 CREATE POLICY "notifications_own" ON notifications FOR ALL USING (auth.uid() = user_id);
 CREATE POLICY "history_own" ON listening_history FOR ALL USING (auth.uid() = user_id);
 
 -- Catalog tables are public read
-CREATE POLICY "catalog_tracks_public" ON catalog_tracks FOR SELECT USING (true);
-CREATE POLICY "catalog_albums_public" ON catalog_albums FOR SELECT USING (true);
-CREATE POLICY "catalog_podcasts_public" ON catalog_podcasts FOR SELECT USING (true);
-CREATE POLICY "catalog_concerts_public" ON catalog_concerts FOR SELECT USING (true);
-CREATE POLICY "catalog_videos_public" ON catalog_music_videos FOR SELECT USING (true);
-CREATE POLICY "audio_features_public" ON track_audio_features FOR SELECT USING (true);
-CREATE POLICY "compat_scores_participant" ON compatibility_scores FOR SELECT
-  USING (auth.uid() = user_a OR auth.uid() = user_b);
-
 ALTER TABLE catalog_tracks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE catalog_albums ENABLE ROW LEVEL SECURITY;
 ALTER TABLE catalog_podcasts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE catalog_podcast_episodes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE catalog_concerts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE catalog_music_videos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE track_audio_features ENABLE ROW LEVEL SECURITY;
-ALTER TABLE compatibility_scores ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "catalog_tracks_public" ON catalog_tracks FOR SELECT USING (true);
+CREATE POLICY "catalog_albums_public" ON catalog_albums FOR SELECT USING (true);
+CREATE POLICY "catalog_podcasts_public" ON catalog_podcasts FOR SELECT USING (true);
+CREATE POLICY "catalog_podcast_episodes_public" ON catalog_podcast_episodes FOR SELECT USING (true);
+CREATE POLICY "catalog_concerts_public" ON catalog_concerts FOR SELECT USING (true);
+CREATE POLICY "catalog_videos_public" ON catalog_music_videos FOR SELECT USING (true);
+CREATE POLICY "audio_features_public" ON track_audio_features FOR SELECT USING (true);

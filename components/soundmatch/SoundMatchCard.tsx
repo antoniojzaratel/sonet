@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  Image,
   Animated,
   PanResponder,
   Dimensions,
@@ -13,7 +12,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Colors, Spacing, Radius } from '@/constants/colors';
-import { tasteMatchToLabel, tasteMatchToColor, getInitials } from '@/lib/utils';
+import { tasteMatchToLabel, tasteMatchToColor } from '@/lib/utils';
 import type { SoundMatchCandidate } from '@/stores/recommendationStore';
 
 const { width } = Dimensions.get('window');
@@ -21,20 +20,13 @@ const SWIPE_THRESHOLD = width * 0.30;
 
 interface Props {
   candidate: SoundMatchCandidate;
-  compatBreakdown?: {
-    genre_match: number;
-    rhythm_match: number;
-    mood_match: number;
-    era_match: number;
-    language_match: number;
-  } | null;
   onLike: () => void;
   onPass: () => void;
   onSuperLike: () => void;
   isTop: boolean;
 }
 
-export function SoundMatchCard({ candidate, compatBreakdown, onLike, onPass, onSuperLike, isTop }: Props) {
+export function SoundMatchCard({ candidate, onLike, onPass, onSuperLike, isTop }: Props) {
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
   const rotate = translateX.interpolate({ inputRange: [-width, 0, width], outputRange: ['-18deg', '0deg', '18deg'] });
@@ -76,7 +68,7 @@ export function SoundMatchCard({ candidate, compatBreakdown, onLike, onPass, onS
     });
   };
 
-  const { user, taste_score } = candidate;
+  const { age, taste_score, audio_score, genre_score, behavior_score, shared_genres } = candidate;
   const matchColor = tasteMatchToColor(taste_score);
   const matchLabel = tasteMatchToLabel(taste_score);
 
@@ -103,15 +95,11 @@ export function SoundMatchCard({ candidate, compatBreakdown, onLike, onPass, onS
         </>
       )}
 
-      {/* Avatar */}
+      {/* Blind profile: no photo, no name — just the taste match visual */}
       <View style={styles.avatarSection}>
-        {user.avatar_url ? (
-          <Image source={{ uri: user.avatar_url }} style={styles.avatar} />
-        ) : (
-          <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.avatar}>
-            <Text style={styles.avatarInitials}>{getInitials(user.display_name || user.username || '?')}</Text>
-          </LinearGradient>
-        )}
+        <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.avatar}>
+          <Text style={styles.avatarGlyph}>🎧</Text>
+        </LinearGradient>
         <LinearGradient
           colors={['transparent', 'rgba(13,13,13,0.9)']}
           style={styles.avatarGradient}
@@ -124,22 +112,27 @@ export function SoundMatchCard({ candidate, compatBreakdown, onLike, onPass, onS
         <Text style={styles.matchLabel}>{matchLabel}</Text>
       </View>
 
-      {/* User info */}
+      {/* Blind profile info — age only, never name/photo */}
       <View style={styles.userInfo}>
-        <Text style={styles.displayName}>{user.display_name}</Text>
-        <Text style={styles.username}>@{user.username}</Text>
-        {user.bio && <Text style={styles.bio} numberOfLines={2}>{user.bio}</Text>}
+        <Text style={styles.displayName}>{age != null ? `${age} años` : 'Edad oculta'}</Text>
+        {!!shared_genres?.length && (
+          <View style={styles.chipsRow}>
+            {shared_genres.slice(0, 3).map((trait) => (
+              <View key={trait} style={styles.chip}>
+                <Text style={styles.chipText}>{trait}</Text>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
 
-      {/* Compatibility breakdown bars */}
-      {compatBreakdown && (
+      {/* Compatibility breakdown bars — real matchEngine.ts dimensions */}
+      {(audio_score != null || genre_score != null || behavior_score != null) && (
         <View style={styles.breakdown}>
           {([
-            ['Géneros', compatBreakdown.genre_match, Colors.primary],
-            ['Ritmo', compatBreakdown.rhythm_match, Colors.secondary],
-            ['Mood', compatBreakdown.mood_match, Colors.accent],
-            ['Era', compatBreakdown.era_match, Colors.warning],
-            ['Idioma', compatBreakdown.language_match, '#3B82F6'],
+            ['Audio', audio_score ?? 0, Colors.primary],
+            ['Géneros', genre_score ?? 0, Colors.secondary],
+            ['Comportamiento', behavior_score ?? 0, Colors.accent],
           ] as [string, number, string][]).map(([label, score, color]) => (
             <View key={label} style={styles.barRow}>
               <Text style={styles.barLabel}>{label}</Text>
@@ -202,7 +195,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitials: { fontSize: 64, fontWeight: '800', color: '#fff' },
+  avatarGlyph: { fontSize: 64 },
   avatarGradient: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 80 },
 
   matchBadge: {
@@ -219,14 +212,22 @@ const styles = StyleSheet.create({
   matchPercent: { fontSize: 18, fontWeight: '900' },
   matchLabel: { fontSize: 9, color: Colors.textMuted, fontWeight: '600' },
 
-  userInfo: { padding: Spacing.md, gap: 2 },
+  userInfo: { padding: Spacing.md, gap: 8 },
   displayName: { fontSize: 22, fontWeight: '800', color: Colors.text },
-  username: { fontSize: 13, color: Colors.textMuted },
-  bio: { fontSize: 13, color: Colors.textSecondary, marginTop: 4, lineHeight: 18 },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  chip: {
+    backgroundColor: Colors.surfaceElevated,
+    borderRadius: Radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  chipText: { color: Colors.textSecondary, fontSize: 11, fontWeight: '600' },
 
   breakdown: { paddingHorizontal: Spacing.md, gap: 5, flex: 1 },
   barRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  barLabel: { color: Colors.textMuted, fontSize: 11, width: 52 },
+  barLabel: { color: Colors.textMuted, fontSize: 11, width: 80 },
   barTrack: { flex: 1, height: 5, backgroundColor: Colors.surfaceElevated, borderRadius: 3, overflow: 'hidden' },
   barFill: { height: '100%', borderRadius: 3 },
   barScore: { fontSize: 10, fontWeight: '700', width: 24, textAlign: 'right' },

@@ -2,11 +2,12 @@ import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useSupabaseAuth, useProtectedRoute } from '@/hooks/useAuth';
+import { useSupabaseAuth, useProtectedRoute, useAuth } from '@/hooks/useAuth';
 import { Colors } from '@/constants/colors';
 
 function RootLayoutNav() {
-  useProtectedRoute();
+  const { user } = useAuth();
+  useProtectedRoute(!!user);
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.background } }}>

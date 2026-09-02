@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,14 +10,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useRecommendationStore, type SoundMatchCandidate } from '@/stores/recommendationStore';
 import { useAuthStore } from '@/stores/authStore';
 import { SoundMatchCard } from '@/components/soundmatch/SoundMatchCard';
 import { Colors, Spacing, Radius } from '@/constants/colors';
+import { supabase } from '@/lib/supabase';
 
 const { width } = Dimensions.get('window');
 
 export default function SoundMatchScreen() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const {
     soundMatchCandidates,
@@ -29,7 +32,22 @@ export default function SoundMatchScreen() {
   } = useRecommendationStore();
 
   const [tab, setTab] = useState<'discover' | 'matches'>('discover');
-  const [optedIn, setOptedIn] = useState(false);
+  // null = still checking soundmatch_profiles; false = off/no row; true = active
+  const [optedIn, setOptedIn] = useState<boolean | null>(null);
+
+  const checkActive = useCallback(async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from('soundmatch_profiles')
+      .select('active')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    setOptedIn(!!data?.active);
+  }, [user?.id]);
+
+  useEffect(() => {
+    checkActive();
+  }, [checkActive]);
 
   useEffect(() => {
     if (user?.id && optedIn) {
@@ -53,8 +71,18 @@ export default function SoundMatchScreen() {
     await swipeSoundMatch(user.id, candidateId, 'super_like');
   };
 
+  if (optedIn === null) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (!optedIn) {
-    return <OptInScreen onOptIn={() => setOptedIn(true)} />;
+    return <OptInScreen onOptIn={() => router.push('/(tabs)/soundmatch/settings')} />;
   }
 
   return (
@@ -62,8 +90,13 @@ export default function SoundMatchScreen() {
       <LinearGradient colors={['#1A0A3E', Colors.background]} style={StyleSheet.absoluteFill} />
 
       <View style={styles.header}>
-        <Text style={styles.title}>SoundMatch 💘</Text>
-        <Text style={styles.subtitle}>Match por compatibilidad musical</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>SoundMatch 💘</Text>
+          <Text style={styles.subtitle}>Match por compatibilidad musical</Text>
+        </View>
+        <TouchableOpacity onPress={() => router.push('/(tabs)/soundmatch/settings')} hitSlop={12}>
+          <Ionicons name="settings-outline" size={22} color={Colors.textSecondary} />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.tabs}>
@@ -107,7 +140,6 @@ export default function SoundMatchScreen() {
                 <SoundMatchCard
                   key={candidate.user.id}
                   candidate={candidate}
-                  compatBreakdown={null}
                   onLike={() => handleLike(candidate.user.id)}
                   onPass={() => handlePass(candidate.user.id)}
                   onSuperLike={() => handleSuperLike(candidate.user.id)}
@@ -201,7 +233,7 @@ function OptInScreen({ onOptIn }: { onOptIn: () => void }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
+  header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   title: { fontSize: 28, fontWeight: '900', color: Colors.text },
   subtitle: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
 

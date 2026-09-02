@@ -15,6 +15,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { isDemoMode } from '@/hooks/useAuth';
+import { useAuthStore } from '@/stores/authStore';
 
 const C = {
   background: '#0D0D0D',
@@ -32,7 +33,9 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const { signInWithGoogle, signInWithApple } = useAuthStore();
 
   const handleLogin = async () => {
     if (isDemoMode) {
@@ -49,12 +52,30 @@ export default function LoginScreen() {
     setLoading(false);
   };
 
+  const handleOAuthLogin = async (provider: 'google' | 'apple') => {
+    if (isDemoMode) {
+      router.replace('/(tabs)');
+      return;
+    }
+    setOauthLoading(provider);
+    const { error } = await (provider === 'google' ? signInWithGoogle() : signInWithApple());
+    if (error) Alert.alert('Error', error);
+    setOauthLoading(null);
+  };
+
   const handleSpotifyLogin = () => {
     if (isDemoMode) {
       router.replace('/(tabs)');
       return;
     }
-    Alert.alert('Spotify', 'Conecta Spotify desde tu perfil después de crear tu cuenta.');
+    Alert.alert(
+      'Conecta Spotify',
+      'Primero crea tu cuenta (correo, Google o Apple) — luego conecta Spotify desde tu perfil para calificar con datos reales.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Crear cuenta', onPress: () => router.push('/(auth)/register') },
+      ]
+    );
   };
 
   return (
@@ -137,13 +158,47 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Divider + optional Spotify */}
+        {/* Divider + social providers */}
         <View style={styles.dividerSection}>
           <View style={styles.dividerRow}>
             <View style={styles.dividerLine} />
             <Text style={styles.dividerLabel}>o continua con</Text>
             <View style={styles.dividerLine} />
           </View>
+
+          <TouchableOpacity
+            style={styles.googleButton}
+            onPress={() => handleOAuthLogin('google')}
+            disabled={oauthLoading !== null}
+            activeOpacity={0.85}
+          >
+            {oauthLoading === 'google' ? (
+              <ActivityIndicator color={C.text} />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={20} color={C.text} />
+                <Text style={styles.googleButtonText}>Continuar con Google</Text>
+              </>
+            )}
+          </TouchableOpacity>
+
+          {Platform.OS === 'ios' && (
+            <TouchableOpacity
+              style={styles.appleButton}
+              onPress={() => handleOAuthLogin('apple')}
+              disabled={oauthLoading !== null}
+              activeOpacity={0.85}
+            >
+              {oauthLoading === 'apple' ? (
+                <ActivityIndicator color="#000" />
+              ) : (
+                <>
+                  <Ionicons name="logo-apple" size={22} color="#000" />
+                  <Text style={styles.appleButtonText}>Continuar con Apple</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.spotifyButton}
@@ -259,6 +314,36 @@ const styles = StyleSheet.create({
   dividerLabel: {
     color: C.textSecondary,
     fontSize: 13,
+  },
+  googleButton: {
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  googleButtonText: {
+    color: C.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  appleButton: {
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  appleButtonText: {
+    color: '#000',
+    fontSize: 16,
+    fontWeight: '700',
   },
   spotifyButton: {
     height: 52,

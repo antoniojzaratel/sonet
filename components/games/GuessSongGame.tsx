@@ -1,47 +1,71 @@
-import { useState, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Animated } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radius } from '@/constants/colors';
-
-const SONGS = [
-  { name: 'Bohemian Rhapsody', artist: 'Queen', hint: '🎭 Ópera rock icónica de los 70s' },
-  { name: 'Despacito', artist: 'Luis Fonsi', hint: '🇵🇷 Canción latina más escuchada del mundo' },
-  { name: 'Thriller', artist: 'Michael Jackson', hint: '🧟 El mejor álbum de MJ' },
-  { name: 'Blinding Lights', artist: 'The Weeknd', hint: '🌃 Synthwave de 2019' },
-  { name: 'Shape of You', artist: 'Ed Sheeran', hint: '🎸 Éxito pop de Ed Sheeran del 2017' },
-];
+import { useAuthStore } from '@/stores/authStore';
+import { useGamesStore } from '@/stores/gamesStore';
+import { MAX_ATTEMPTS, type PuzzleContentType } from '@/lib/dailyGame';
 
 interface Props {
   onExit: () => void;
 }
 
+const TYPE_LABEL: Record<PuzzleContentType, string> = {
+  genre: 'Género',
+  artist: 'Artista',
+  album: 'Álbum',
+  song: 'Canción',
+};
+
 export function GuessSongGame({ onExit }: Props) {
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const { user } = useAuthStore();
+  const { puzzle, attempt, loading, submitGuess, loadToday } = useGamesStore();
   const [guess, setGuess] = useState('');
-  const [revealed, setRevealed] = useState(false);
-  const [correct, setCorrect] = useState(false);
-  const [score, setScore] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [revealedAnswer, setRevealedAnswer] = useState<string | null>(null);
 
-  const song = SONGS[currentIndex];
+  useEffect(() => {
+    if (user?.id) loadToday(user.id);
+  }, [user?.id]);
 
-  const handleGuess = () => {
-    const isCorrect = guess.toLowerCase().includes(song.name.toLowerCase().split(' ')[0]);
-    setCorrect(isCorrect);
-    setRevealed(true);
-    if (isCorrect) setScore((s) => s + 1);
-  };
+  if (!user) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.centerBox}>
+          <Text style={styles.hint}>Inicia sesión para jugar</Text>
+          <TouchableOpacity onPress={onExit} style={{ marginTop: Spacing.lg }}>
+            <Text style={{ color: Colors.primary }}>Volver</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
-  const handleNext = () => {
-    if (currentIndex >= SONGS.length - 1) {
-      onExit();
-      return;
-    }
-    setCurrentIndex((i) => i + 1);
+  if (loading || !puzzle || !attempt) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.centerBox}>
+          <ActivityIndicator color={Colors.primary} size="large" />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const hintsShown = puzzle.hints.slice(0, Math.min(attempt.attemptCount + 1, puzzle.hints.length));
+  const gameOver = attempt.solved || attempt.attemptCount >= MAX_ATTEMPTS;
+
+  const handleGuess = async () => {
+    if (!guess.trim() || submitting) return;
+    setSubmitting(true);
+    const result = await submitGuess(user.id, guess.trim());
+    setSubmitting(false);
     setGuess('');
-    setRevealed(false);
-    setCorrect(false);
+    if (result.answerName) setRevealedAnswer(result.answerName);
+    if (!result.correct && useGamesStore.getState().attempt?.attemptCount === MAX_ATTEMPTS) {
+      Alert.alert('Se acabaron los intentos', 'Vuelve mañana para un nuevo reto.');
+    }
   };
 
   return (
@@ -53,78 +77,90 @@ export function GuessSongGame({ onExit }: Props) {
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Adivina 🎵</Text>
-        <Text style={styles.scoreText}>⭐ {score}/{SONGS.length}</Text>
+        <Text style={styles.scoreText}>🔥 {attempt.streak}</Text>
       </View>
 
-      <View style={styles.content}>
-        <View style={styles.waveContainer}>
-          <View style={styles.playButton}>
-            <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.playGradient}>
-              <Ionicons name={revealed ? 'musical-note' : 'play'} size={40} color="#fff" />
-            </LinearGradient>
-          </View>
-          <Text style={styles.hintLabel}>🔍 Pista:</Text>
-          <Text style={styles.hint}>{song.hint}</Text>
-          <Text style={styles.timer}>5 seg de la canción</Text>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Text style={styles.typeLabel}>Adivina el {TYPE_LABEL[puzzle.contentType].toLowerCase()} de hoy</Text>
+
+        <View style={styles.hintsBox}>
+          {hintsShown.map((h, i) => (
+            <View key={i} style={styles.hintRow}>
+              <Text style={styles.hintBullet}>🔍</Text>
+              <Text style={styles.hint}>{h}</Text>
+            </View>
+          ))}
         </View>
 
-        {!revealed ? (
+        <View style={styles.attemptsRow}>
+          {Array.from({ length: MAX_ATTEMPTS }).map((_, i) => {
+            const g = attempt.guesses[i];
+            return (
+              <View
+                key={i}
+                style={[
+                  styles.attemptDot,
+                  g && (g.correct ? styles.attemptDotCorrect : styles.attemptDotWrong),
+                ]}
+              />
+            );
+          })}
+        </View>
+
+        {attempt.guesses.length > 0 && (
+          <View style={styles.guessHistory}>
+            {attempt.guesses.map((g, i) => (
+              <Text key={i} style={[styles.guessHistoryItem, g.correct && styles.guessHistoryCorrect]}>
+                {g.correct ? '✅' : '❌'} {g.text}
+              </Text>
+            ))}
+          </View>
+        )}
+
+        {!gameOver ? (
           <View style={styles.guessSection}>
             <TextInput
               style={styles.guessInput}
-              placeholder="Escribe el nombre de la canción..."
+              placeholder={`Escribe el ${TYPE_LABEL[puzzle.contentType].toLowerCase()}...`}
               placeholderTextColor={Colors.textMuted}
               value={guess}
               onChangeText={setGuess}
               returnKeyType="done"
               onSubmitEditing={handleGuess}
+              editable={!submitting}
             />
-            <TouchableOpacity onPress={handleGuess} disabled={!guess.trim()} activeOpacity={0.8}>
+            <TouchableOpacity onPress={handleGuess} disabled={!guess.trim() || submitting} activeOpacity={0.8}>
               <LinearGradient
                 colors={guess.trim() ? [Colors.primary, Colors.primaryDark] : [Colors.border, Colors.border]}
                 style={styles.guessButton}
               >
-                <Text style={styles.guessButtonText}>Responder</Text>
+                {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.guessButtonText}>Responder</Text>}
               </LinearGradient>
             </TouchableOpacity>
           </View>
         ) : (
           <View style={styles.result}>
-            <Text style={styles.resultEmoji}>{correct ? '✅' : '❌'}</Text>
-            <Text style={[styles.resultLabel, { color: correct ? Colors.secondary : Colors.accent }]}>
-              {correct ? '¡Correcto!' : 'Era...'}
+            <Text style={styles.resultEmoji}>{attempt.solved ? '✅' : '❌'}</Text>
+            <Text style={[styles.resultLabel, { color: attempt.solved ? Colors.secondary : Colors.accent }]}>
+              {attempt.solved ? '¡Correcto!' : 'No esta vez'}
             </Text>
-            <Text style={styles.songName}>{song.name}</Text>
-            <Text style={styles.artistName}>{song.artist}</Text>
-            <TouchableOpacity onPress={handleNext} activeOpacity={0.8}>
+            {revealedAnswer && <Text style={styles.songName}>{revealedAnswer}</Text>}
+            <Text style={styles.artistName}>Vuelve mañana para un nuevo reto</Text>
+            <TouchableOpacity onPress={onExit} activeOpacity={0.8}>
               <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>
-                  {currentIndex >= SONGS.length - 1 ? 'Ver resultados' : 'Siguiente →'}
-                </Text>
+                <Text style={styles.nextButtonText}>Volver</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
         )}
-      </View>
-
-      <View style={styles.progressDots}>
-        {SONGS.map((_, i) => (
-          <View
-            key={i}
-            style={[
-              styles.dot,
-              i === currentIndex && styles.dotActive,
-              i < currentIndex && styles.dotDone,
-            ]}
-          />
-        ))}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -136,25 +172,23 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: '800', color: Colors.text },
   scoreText: { color: Colors.primary, fontSize: 15, fontWeight: '700' },
 
-  content: { flex: 1, paddingHorizontal: Spacing.lg, justifyContent: 'center', gap: Spacing.xl },
+  content: { paddingHorizontal: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.lg },
 
-  waveContainer: { alignItems: 'center', gap: Spacing.md },
-  playButton: { marginBottom: Spacing.md },
-  playGradient: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-  hintLabel: { color: Colors.textMuted, fontSize: 13, fontWeight: '600' },
-  hint: { color: Colors.text, fontSize: 16, fontWeight: '600', textAlign: 'center' },
-  timer: { color: Colors.textMuted, fontSize: 12 },
+  typeLabel: { color: Colors.textSecondary, fontSize: 14, fontWeight: '600', textAlign: 'center', marginTop: Spacing.md },
+
+  hintsBox: { gap: Spacing.sm },
+  hintRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  hintBullet: { fontSize: 14 },
+  hint: { color: Colors.text, fontSize: 16, fontWeight: '600', flex: 1 },
+
+  attemptsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  attemptDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: Colors.border },
+  attemptDotCorrect: { backgroundColor: Colors.secondary },
+  attemptDotWrong: { backgroundColor: Colors.accent },
+
+  guessHistory: { gap: 4 },
+  guessHistoryItem: { color: Colors.textMuted, fontSize: 14 },
+  guessHistoryCorrect: { color: Colors.secondary, fontWeight: '700' },
 
   guessSection: { gap: Spacing.md },
   guessInput: {
@@ -170,26 +204,11 @@ const styles = StyleSheet.create({
   guessButton: { borderRadius: Radius.md, height: 52, alignItems: 'center', justifyContent: 'center' },
   guessButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
-  result: { alignItems: 'center', gap: Spacing.md },
+  result: { alignItems: 'center', gap: Spacing.md, paddingTop: Spacing.lg },
   resultEmoji: { fontSize: 56 },
   resultLabel: { fontSize: 20, fontWeight: '800' },
   songName: { fontSize: 22, fontWeight: '900', color: Colors.text, textAlign: 'center' },
   artistName: { fontSize: 15, color: Colors.textSecondary },
-  nextButton: {
-    borderRadius: Radius.md,
-    paddingVertical: 14,
-    paddingHorizontal: Spacing.xxl,
-    marginTop: Spacing.sm,
-  },
+  nextButton: { borderRadius: Radius.md, paddingVertical: 14, paddingHorizontal: Spacing.xxl, marginTop: Spacing.sm },
   nextButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-
-  progressDots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 8,
-    paddingBottom: 40,
-  },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.border },
-  dotActive: { backgroundColor: Colors.primary, width: 24 },
-  dotDone: { backgroundColor: Colors.primaryDark },
 });

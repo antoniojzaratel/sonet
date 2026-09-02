@@ -13,9 +13,12 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRatingStore } from '@/stores/ratingStore';
 import { useAuthStore } from '@/stores/authStore';
-import { scoreColor, formatScore } from '@/lib/mockData';
+import { scoreToColor as scoreColor, formatScore } from '@/lib/utils';
 import { MusicDashboard } from '@/components/dashboard/MusicDashboard';
 import { Colors } from '@/constants/colors';
+import { supabase } from '@/lib/supabase';
+import { isDemoMode } from '@/hooks/useAuth';
+import { useSpotifyAuth, fetchSpotifyProfile } from '@/lib/spotify';
 import type { RatingEntry } from '@/stores/ratingStore';
 
 type Tab = 'ratings' | 'top10' | 'stats';
@@ -36,9 +39,12 @@ function getInitials(name: string): string {
 }
 
 const CONTENT_TYPE_LABEL: Record<string, string> = {
-  track: 'Cancion',
+  song: 'Cancion',
+  single: 'Single',
   album: 'Album',
   podcast: 'Podcast',
+  concert: 'Concierto',
+  music_video: 'Video',
 };
 
 function TypeBadge({ type }: { type: string }) {
@@ -77,12 +83,14 @@ function RatingRow({ entry, showRank, rank }: { entry: RatingEntry; showRank?: b
 export default function ProfileScreen() {
   const [activeTab, setActiveTab] = useState<Tab>('ratings');
   const [bio, setBio] = useState<string>('Sin bio aun');
+  const [connectingSpotify, setConnectingSpotify] = useState(false);
 
-  const { spotifyToken } = useAuthStore();
+  const { user, spotifyToken, setSpotifyToken, setSpotifyRefreshToken, fetchProfile } = useAuthStore();
   const { ratings, loading, loadRatings, getTopRated, getStats } = useRatingStore();
+  const { request, response, promptAsync, exchangeCode } = useSpotifyAuth();
 
   useEffect(() => {
-    loadRatings();
+    if (user?.id) loadRatings(user.id);
     AsyncStorage.getItem('sonet_onboarding_genres').then((raw) => {
       if (raw) {
         try {
@@ -93,14 +101,40 @@ export default function ProfileScreen() {
         }
       }
     });
-  }, []);
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (response?.type !== 'success' || !request?.codeVerifier || !user?.id) return;
+    (async () => {
+      setConnectingSpotify(true);
+      const tokens = await exchangeCode(response.params.code, request.codeVerifier!);
+      if (tokens) {
+        setSpotifyToken(tokens.accessToken);
+        setSpotifyRefreshToken(tokens.refreshToken);
+        if (!isDemoMode) {
+          await supabase.from('user_secrets').upsert({
+            user_id: user.id,
+            spotify_token: tokens.accessToken,
+            spotify_refresh: tokens.refreshToken,
+            spotify_token_expires_at: new Date(Date.now() + tokens.expiresIn * 1000).toISOString(),
+          });
+          const profile = await fetchSpotifyProfile(tokens.accessToken);
+          if (profile) {
+            await supabase.from('users').update({ spotify_id: profile.id }).eq('id', user.id);
+            await fetchProfile(user.id);
+          }
+        }
+      }
+      setConnectingSpotify(false);
+    })();
+  }, [response]);
 
   const stats = getStats();
   const topRated = getTopRated(10);
   const hasSpotify = !!spotifyToken;
 
-  const displayName = 'Tu Perfil';
-  const username = '@yo';
+  const displayName = user?.display_name ?? 'Tu Perfil';
+  const username = `@${user?.username ?? 'yo'}`;
   const initials = getInitials(displayName);
 
   // Stats for dashboard tab
@@ -113,8 +147,12 @@ export default function ProfileScreen() {
   const uniqueArtists = new Set(ratings.map((r) => r.artistName)).size;
 
   const handleSpotifyConnect = useCallback(() => {
-    Alert.alert('Proximamente', 'La integracion con Spotify llegara pronto');
-  }, []);
+    if (!request) {
+      Alert.alert('Spotify no configurado', 'Falta EXPO_PUBLIC_SPOTIFY_CLIENT_ID en las variables de entorno.');
+      return;
+    }
+    promptAsync();
+  }, [request, promptAsync]);
 
   const sortedRatings = [...ratings].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -155,20 +193,26 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statCol}>
-              <Text style={styles.statNumber}>0</Text>
+              <Text style={styles.statNumber}>{user?.followers_count ?? 0}</Text>
               <Text style={styles.statLabel}>Seguidores</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statCol}>
-              <Text style={styles.statNumber}>0</Text>
+              <Text style={styles.statNumber}>{user?.following_count ?? 0}</Text>
               <Text style={styles.statLabel}>Siguiendo</Text>
             </View>
           </View>
 
           {/* Spotify connect — only if not connected */}
           {!hasSpotify && (
-            <TouchableOpacity style={styles.spotifyButton} onPress={handleSpotifyConnect}>
-              <Text style={styles.spotifyButtonText}>Conectar Spotify</Text>
+            <TouchableOpacity
+              style={styles.spotifyButton}
+              onPress={handleSpotifyConnect}
+              disabled={connectingSpotify}
+            >
+              <Text style={styles.spotifyButtonText}>
+                {connectingSpotify ? 'Conectando...' : 'Conectar Spotify'}
+              </Text>
             </TouchableOpacity>
           )}
         </View>

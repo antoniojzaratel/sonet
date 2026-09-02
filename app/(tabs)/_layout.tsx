@@ -54,12 +54,36 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="date"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon
+              iconName={focused ? 'heart' : 'heart-outline'}
+              label="Matches"
+              focused={focused}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="map"
         options={{
           tabBarIcon: ({ focused }) => (
             <TabIcon
               iconName={focused ? 'calendar' : 'calendar-outline'}
               label="Eventos"
+              focused={focused}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="games"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon
+              iconName={focused ? 'game-controller' : 'game-controller-outline'}
+              label="Juegos"
               focused={focused}
             />
           ),
@@ -77,8 +101,8 @@ export default function TabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen name="date" options={{ href: null }} />
-      <Tabs.Screen name="games" options={{ href: null }} />
+      {/* Not a tab — /soundmatch/settings is pushed from the Matches (date.tsx) screen. */}
+      <Tabs.Screen name="soundmatch" options={{ href: null }} />
     </Tabs>
   );
 }

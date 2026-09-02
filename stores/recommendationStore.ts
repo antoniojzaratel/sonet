@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
+import { computeMatch } from '@/lib/ai/matchEngine';
+import type { MusicVector } from '@/lib/ai/tasteVector';
 
 const ML_BASE = process.env.EXPO_PUBLIC_ML_API_URL ?? 'http://localhost:8000';
 
@@ -23,18 +25,19 @@ export interface DailyRecommendation {
   reaction?: string;
 }
 
+// Blind profile: candidates NEVER carry display_name/avatar_url/username/bio.
+// Only what soundmatch_profiles explicitly opts into showing, plus taste match.
 export interface SoundMatchCandidate {
-  user: {
-    id: string;
-    username: string;
-    display_name: string;
-    avatar_url?: string;
-    bio?: string;
-  };
+  user: { id: string };
+  age: number | null; // null when the candidate has show_age = false
   taste_score: number;
+  audio_score?: number;
+  genre_score?: number;
+  behavior_score?: number;
+  shared_genres?: string[];
+  shared_artists?: string[];
   soundmatch_profile?: {
     looking_for: string[];
-    age?: number;
   };
 }
 
@@ -53,6 +56,126 @@ interface RecommendationState {
   fetchSoundMatchMatches: (userId: string) => Promise<void>;
   buildDNA: (userId: string, spotifyToken: string) => Promise<void>;
   computeCompatibility: (userA: string, userB: string) => Promise<number | null>;
+}
+
+// Neutral fallback vector for users with no music_profiles row yet, so
+// compatibility never hard-fails — just scores as "average" until they sync.
+const NEUTRAL_VECTOR: MusicVector = {
+  energy: 0.5, danceability: 0.5, valence: 0.5, acousticness: 0.3,
+  instrumentalness: 0.1, speechiness: 0.1, tempo_norm: 0.5, loudness_norm: 0.5,
+  liveness: 0.2, genre_pop: 0.2, genre_rock: 0.15, genre_hip_hop: 0.15,
+  genre_electronic: 0.1, genre_latin: 0.1, genre_rnb: 0.1, genre_jazz: 0.05,
+  genre_classical: 0.05, genre_other: 0.1, avg_rating_norm: 0.6,
+  bpm_preference: 0.5, vocal_preference: 0.8, mood_index: 0.5, diversity: 0.3,
+};
+
+interface SoundmatchProfileRow {
+  user_id: string;
+  active: boolean;
+  age: number | null;
+  age_min: number;
+  age_max: number;
+  looking_for: string[];
+  gender: string | null;
+  gender_preference: string[];
+  show_age: boolean;
+}
+
+function genderMatchesPreference(gender: string | null, preference: string[]): boolean {
+  if (!preference || preference.length === 0) return true;
+  if (preference.includes('both')) return true;
+  if (!gender) return false;
+  const bucket = gender === 'man' || gender === 'men' ? 'men' : gender === 'woman' || gender === 'women' ? 'women' : gender;
+  return preference.includes(bucket);
+}
+
+function ageOverlaps(viewer: SoundmatchProfileRow, candidate: SoundmatchProfileRow): boolean {
+  // Permissive when age data is missing on either side — never over-filter a small demo pool.
+  if (candidate.age != null && (candidate.age < viewer.age_min || candidate.age > viewer.age_max)) return false;
+  if (viewer.age != null && (viewer.age < candidate.age_min || viewer.age > candidate.age_max)) return false;
+  return true;
+}
+
+async function fetchMusicVector(userId: string): Promise<MusicVector> {
+  const { data } = await supabase.from('music_profiles').select('feature_vector').eq('user_id', userId).maybeSingle();
+  return (data?.feature_vector as MusicVector | undefined) ?? NEUTRAL_VECTOR;
+}
+
+/** Computes (or reuses a cached) matchEngine.ts score between two users and upserts compatibility_scores. */
+async function computeAndCacheCompatibility(userId: string, otherId: string) {
+  const userA = userId < otherId ? userId : otherId;
+  const userB = userId < otherId ? otherId : userId;
+
+  const { data: cached } = await supabase
+    .from('compatibility_scores')
+    .select('*')
+    .eq('user_a', userA)
+    .eq('user_b', userB)
+    .maybeSingle();
+  if (cached) return cached;
+
+  const [vecA, vecB] = await Promise.all([fetchMusicVector(userA), fetchMusicVector(userB)]);
+  const match = computeMatch(vecA, vecB);
+
+  const row = {
+    user_a: userA,
+    user_b: userB,
+    taste_score: match.score,
+    audio_score: match.audio_score,
+    genre_score: match.genre_score,
+    behavior_score: match.behavior_score,
+    shared_genres: match.shared_traits,
+    shared_artists: [],
+  };
+  const { data: saved } = await supabase.from('compatibility_scores').upsert(row).select('*').maybeSingle();
+  return saved ?? row;
+}
+
+/** Blind-profile candidate list: mutual gender/orientation + age filter, no identity fields ever selected. */
+async function fetchBlindCandidates(userId: string): Promise<SoundMatchCandidate[]> {
+  const { data: viewer } = await supabase
+    .from('soundmatch_profiles')
+    .select('user_id, active, age, age_min, age_max, looking_for, gender, gender_preference, show_age')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!viewer || !viewer.active) return [];
+
+  const { data: swiped } = await supabase.from('soundmatch_swipes').select('target_id').eq('swiper_id', userId);
+  const swipedIds = new Set((swiped ?? []).map((s: any) => s.target_id as string));
+
+  const { data: pool } = await supabase
+    .from('soundmatch_profiles')
+    .select('user_id, active, age, age_min, age_max, looking_for, gender, gender_preference, show_age')
+    .eq('active', true)
+    .neq('user_id', userId)
+    .limit(100);
+
+  const candidates = (pool ?? []).filter((c: SoundmatchProfileRow) => {
+    if (swipedIds.has(c.user_id)) return false;
+    if (!genderMatchesPreference(c.gender, viewer.gender_preference)) return false;
+    if (!genderMatchesPreference(viewer.gender, c.gender_preference)) return false;
+    if (!ageOverlaps(viewer as SoundmatchProfileRow, c)) return false;
+    return true;
+  });
+
+  const scored = await Promise.all(
+    candidates.map(async (c: SoundmatchProfileRow) => {
+      const compat = await computeAndCacheCompatibility(userId, c.user_id);
+      return {
+        user: { id: c.user_id },
+        age: c.show_age ? c.age : null,
+        taste_score: Math.round(compat.taste_score),
+        audio_score: compat.audio_score,
+        genre_score: compat.genre_score,
+        behavior_score: compat.behavior_score,
+        shared_genres: compat.shared_genres ?? [],
+        shared_artists: compat.shared_artists ?? [],
+        soundmatch_profile: { looking_for: c.looking_for },
+      } satisfies SoundMatchCandidate;
+    })
+  );
+
+  return scored.sort((a, b) => b.taste_score - a.taste_score).slice(0, 20);
 }
 
 export const useRecommendationStore = create<RecommendationState>((set, get) => ({
@@ -115,28 +238,13 @@ export const useRecommendationStore = create<RecommendationState>((set, get) => 
     set({ loadingCandidates: true });
     try {
       const res = await fetch(`${ML_BASE}/soundmatch/candidates/${userId}?limit=30`);
-      if (res.ok) {
-        const json = await res.json();
-        set({ soundMatchCandidates: json.candidates || [] });
-      }
+      if (!res.ok) throw new Error('ml api unavailable');
+      const json = await res.json();
+      set({ soundMatchCandidates: json.candidates || [] });
     } catch {
-      // Fallback: fetch from compatibility_scores directly
-      const { data } = await supabase
-        .from('compatibility_scores')
-        .select('*, users!user_b(id, username, display_name, avatar_url, bio)')
-        .eq('user_a', userId)
-        .gte('taste_score', 50)
-        .order('taste_score', { ascending: false })
-        .limit(20);
-
-      if (data) {
-        set({
-          soundMatchCandidates: data.map((row: any) => ({
-            user: row.users,
-            taste_score: row.taste_score,
-          })),
-        });
-      }
+      // Fallback: Supabase-direct, blind-profile candidate query.
+      const candidates = await fetchBlindCandidates(userId);
+      set({ soundMatchCandidates: candidates });
     }
     set({ loadingCandidates: false });
   },

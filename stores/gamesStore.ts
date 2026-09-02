@@ -1,0 +1,174 @@
+import { create } from 'zustand';
+import { supabase } from '@/lib/supabase';
+import { puzzleForDate, todayDateString, dateOffsetString, MAX_ATTEMPTS, type PuzzleContentType } from '@/lib/dailyGame';
+
+export interface GuessRecord {
+  text: string;
+  correct: boolean;
+}
+
+export interface PuzzlePublic {
+  date: string;
+  contentType: PuzzleContentType;
+  hints: string[];
+}
+
+export interface GameAttemptState {
+  date: string;
+  guesses: GuessRecord[];
+  solved: boolean;
+  attemptCount: number;
+  streak: number;
+}
+
+interface GameAttemptRow {
+  user_id: string;
+  date: string;
+  guesses: GuessRecord[];
+  solved: boolean;
+  attempt_count: number;
+  streak: number;
+}
+
+interface GamesStats {
+  currentStreak: number;
+  bestStreak: number;
+  totalSolved: number;
+}
+
+interface GamesState {
+  puzzle: PuzzlePublic | null;
+  attempt: GameAttemptState | null;
+  loading: boolean;
+  stats: GamesStats;
+  loadingStats: boolean;
+
+  loadToday: (userId: string) => Promise<void>;
+  submitGuess: (userId: string, guessText: string) => Promise<{ correct: boolean; answerName: string | null }>;
+  loadStats: (userId: string) => Promise<void>;
+}
+
+function emptyAttempt(date: string): GameAttemptState {
+  return { date, guesses: [], solved: false, attemptCount: 0, streak: 0 };
+}
+
+export const useGamesStore = create<GamesState>((set, get) => ({
+  puzzle: null,
+  attempt: null,
+  loading: false,
+  stats: { currentStreak: 0, bestStreak: 0, totalSolved: 0 },
+  loadingStats: false,
+
+  loadToday: async (userId) => {
+    set({ loading: true });
+    const date = todayDateString();
+    const seed = puzzleForDate(date);
+
+    // Every client derives the same seed for `date`, so this is safe to
+    // race — the first writer wins and everyone else is a no-op.
+    await supabase.from('daily_game_puzzles').upsert(
+      {
+        date,
+        content_type: seed.contentType,
+        answer_id: seed.answerId,
+        answer_name: seed.answerName,
+        hints: seed.hints,
+      },
+      { onConflict: 'date', ignoreDuplicates: true }
+    );
+
+    const { data: attemptRow } = await supabase
+      .from('game_attempts')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('date', date)
+      .maybeSingle();
+
+    const attempt: GameAttemptState = attemptRow
+      ? {
+          date: (attemptRow as GameAttemptRow).date,
+          guesses: (attemptRow as GameAttemptRow).guesses ?? [],
+          solved: (attemptRow as GameAttemptRow).solved,
+          attemptCount: (attemptRow as GameAttemptRow).attempt_count,
+          streak: (attemptRow as GameAttemptRow).streak,
+        }
+      : emptyAttempt(date);
+
+    set({
+      puzzle: { date, contentType: seed.contentType, hints: seed.hints },
+      attempt,
+      loading: false,
+    });
+  },
+
+  submitGuess: async (userId, guessText) => {
+    const { attempt } = get();
+    if (!attempt || attempt.solved || attempt.attemptCount >= MAX_ATTEMPTS) {
+      return { correct: false, answerName: null };
+    }
+
+    const { data, error } = await supabase.rpc('check_daily_guess', {
+      p_date: attempt.date,
+      p_guess: guessText,
+    });
+    if (error) return { correct: false, answerName: null };
+
+    const result = (data as { correct: boolean; answer_name: string | null }[] | null)?.[0];
+    const correct = result?.correct ?? false;
+    const answerName = result?.answer_name ?? null;
+
+    const guesses = [...attempt.guesses, { text: guessText, correct }];
+    const attemptCount = attempt.attemptCount + 1;
+    const solved = correct;
+
+    let streak = attempt.streak;
+    if (solved) {
+      const yesterday = dateOffsetString(attempt.date, -1);
+      const { data: prevRow } = await supabase
+        .from('game_attempts')
+        .select('solved, streak')
+        .eq('user_id', userId)
+        .eq('date', yesterday)
+        .maybeSingle();
+      streak = prevRow?.solved ? (prevRow.streak ?? 0) + 1 : 1;
+    }
+
+    const nextAttempt: GameAttemptState = { date: attempt.date, guesses, solved, attemptCount, streak };
+
+    await supabase.from('game_attempts').upsert(
+      {
+        user_id: userId,
+        date: attempt.date,
+        guesses,
+        solved,
+        attempt_count: attemptCount,
+        streak,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'user_id,date' }
+    );
+
+    set({ attempt: nextAttempt });
+    return { correct, answerName };
+  },
+
+  loadStats: async (userId) => {
+    set({ loadingStats: true });
+    const { data } = await supabase
+      .from('game_attempts')
+      .select('date, solved, streak')
+      .eq('user_id', userId)
+      .order('date', { ascending: false });
+
+    const rows = (data ?? []) as { date: string; solved: boolean; streak: number }[];
+    const totalSolved = rows.filter((r) => r.solved).length;
+    const bestStreak = rows.reduce((max, r) => Math.max(max, r.streak), 0);
+
+    const today = todayDateString();
+    const yesterday = dateOffsetString(today, -1);
+    const latest = rows[0];
+    const currentStreak = latest && (latest.date === today || latest.date === yesterday) ? latest.streak : 0;
+
+    set({ stats: { currentStreak, bestStreak, totalSolved }, loadingStats: false });
+  },
+}));

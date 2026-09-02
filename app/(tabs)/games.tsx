@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import { Colors, Spacing, Radius } from '@/constants/colors';
 import { VersusGame } from '@/components/games/VersusGame';
 import { GuessSongGame } from '@/components/games/GuessSongGame';
 import { DiscoveryRoulette } from '@/components/games/DiscoveryRoulette';
+import { useAuthStore } from '@/stores/authStore';
+import { useGamesStore } from '@/stores/gamesStore';
 
 type GameMode = null | 'versus' | 'guess' | 'roulette';
 
@@ -43,6 +45,12 @@ const GAMES = [
 
 export default function GamesScreen() {
   const [activeGame, setActiveGame] = useState<GameMode>(null);
+  const { user } = useAuthStore();
+  const { stats, loadStats } = useGamesStore();
+
+  useEffect(() => {
+    if (user?.id) loadStats(user.id);
+  }, [user?.id, activeGame]);
 
   if (activeGame === 'versus') {
     return <VersusGame onExit={() => setActiveGame(null)} />;
@@ -88,9 +96,9 @@ export default function GamesScreen() {
       </View>
 
       <View style={styles.statsBar}>
-        <StatItem emoji="🏆" label="Victorias" value="0" />
-        <StatItem emoji="🎯" label="Racha" value="0" />
-        <StatItem emoji="⭐" label="XP" value="0" />
+        <StatItem emoji="🏆" label="Resueltos" value={String(stats.totalSolved)} />
+        <StatItem emoji="🔥" label="Racha" value={String(stats.currentStreak)} />
+        <StatItem emoji="⭐" label="Mejor racha" value={String(stats.bestStreak)} />
       </View>
     </SafeAreaView>
   );

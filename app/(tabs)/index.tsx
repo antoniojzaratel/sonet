@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,117 +11,96 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  MOCK_RATINGS,
-  getUserById,
-  scoreColor,
-  formatScore,
-  timeAgo,
-  POPULAR_CATALOG,
-  searchCatalog,
-  type MockRating,
-  type CatalogItem,
-} from '@/lib/mockData';
-import { useRatingStore } from '@/stores/ratingStore';
+import { useRatingStore, type FeedEntry } from '@/stores/ratingStore';
+import { useAuthStore } from '@/stores/authStore';
+import { searchMusic, type MusicItem } from '@/lib/musicDB';
+import { CompareDuel, type DuelItem } from '@/components/rating/CompareDuel';
+import { BUCKET_LABELS, type Bucket, type Comparator } from '@/lib/ranking';
+import { scoreToColor, formatScore, formatRelativeTime } from '@/lib/utils';
 import type { RatingEntry } from '@/stores/ratingStore';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface FeedRating extends MockRating {
-  user: {
-    displayName: string;
-    username: string;
-    initials: string;
-    avatarColor: string;
-  };
-}
+import type { ContentType } from '@/types';
 
 // ─── FeedCard ─────────────────────────────────────────────────────────────────
 
 interface FeedCardProps {
-  item: FeedRating;
+  entry: FeedEntry;
   liked: boolean;
   onToggleLike: (id: string) => void;
 }
 
-function FeedCard({ item, liked, onToggleLike }: FeedCardProps) {
-  const displayLikeCount = liked
-    ? item.likedByMe
-      ? item.likeCount
-      : item.likeCount + 1
-    : item.likedByMe
-    ? item.likeCount - 1
-    : item.likeCount;
+function initialsOf(name: string): string {
+  return (
+    name
+      .split(' ')
+      .slice(0, 2)
+      .map((w) => w[0] ?? '')
+      .join('')
+      .toUpperCase() || '?'
+  );
+}
+
+function FeedCard({ entry, liked, onToggleLike }: FeedCardProps) {
+  const { rating, user } = entry;
+  const color = scoreToColor(rating.score);
 
   return (
     <View style={styles.card}>
-      {/* Row 1: user info + time */}
       <View style={styles.cardRow}>
-        <View style={[styles.avatar, { backgroundColor: item.user.avatarColor }]}>
-          <Text style={styles.avatarText}>{item.user.initials}</Text>
+        <View style={[styles.avatar, { backgroundColor: color }]}>
+          <Text style={styles.avatarText}>{initialsOf(user.displayName)}</Text>
         </View>
         <View style={styles.userCol}>
-          <Text style={styles.displayName}>{item.user.displayName}</Text>
+          <Text style={styles.displayName}>{user.displayName}</Text>
           <Text style={styles.userMeta}>
-            @{item.user.username} · {timeAgo(item.createdAt)}
+            @{user.username} · {formatRelativeTime(rating.createdAt)}
           </Text>
         </View>
       </View>
 
-      {/* Row 2: content */}
       <View style={[styles.cardRow, styles.contentRow]}>
-        <View style={[styles.cover, { backgroundColor: item.coverColor }]}>
-          <Text style={styles.coverInitial}>{item.coverInitial}</Text>
+        <View style={[styles.cover, { backgroundColor: Colors_fallback(rating.contentId) }]}>
+          <Text style={styles.coverInitial}>{rating.contentName.charAt(0).toUpperCase()}</Text>
         </View>
         <View style={styles.contentCol}>
-          <Text style={styles.contentName} numberOfLines={1}>
-            {item.contentName}
-          </Text>
-          <Text style={styles.artistName}>{item.artistName}</Text>
-          <Text style={styles.contentType}>
-            {item.contentType === 'album' ? 'ALBUM' : 'CANCION'}
-          </Text>
+          <Text style={styles.contentName} numberOfLines={1}>{rating.contentName}</Text>
+          <Text style={styles.artistName}>{rating.artistName}</Text>
+          <Text style={styles.contentType}>{rating.contentType.replace('_', ' ').toUpperCase()}</Text>
         </View>
-        <View style={[styles.scoreBadge, { backgroundColor: scoreColor(item.score) }]}>
-          <Text style={styles.scoreText}>{formatScore(item.score)}</Text>
+        <View style={[styles.scoreBadge, { backgroundColor: color }]}>
+          <Text style={styles.scoreText}>{formatScore(rating.score)}</Text>
         </View>
       </View>
 
-      {/* Review */}
-      {!!item.review && (
-        <Text style={styles.review}>{item.review}</Text>
-      )}
+      {!!rating.review && <Text style={styles.review}>{rating.review}</Text>}
 
-      {/* Row 3: actions */}
       <View style={styles.actionsRow}>
-        <TouchableOpacity
-          style={styles.likeBtn}
-          onPress={() => onToggleLike(item.id)}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={liked ? 'heart' : 'heart-outline'}
-            size={18}
-            color={liked ? '#F43F5E' : '#666666'}
-          />
-          <Text style={[styles.likeCount, liked && styles.likeCountActive]}>
-            {displayLikeCount > 0 ? String(displayLikeCount) : 'Me gusta'}
-          </Text>
+        <TouchableOpacity style={styles.likeBtn} onPress={() => onToggleLike(rating.id)} activeOpacity={0.7}>
+          <Ionicons name={liked ? 'heart' : 'heart-outline'} size={18} color={liked ? '#F43F5E' : '#666666'} />
+          <Text style={[styles.likeCount, liked && styles.likeCountActive]}>Me gusta</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
+// Deterministic fallback color per content id, so covers without art still look distinct.
+function Colors_fallback(seed: string): string {
+  const palette = ['#A855F7', '#F43F5E', '#84CC16', '#F59E0B', '#06B6D4', '#8B5CF6', '#EC4899', '#10B981'];
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  return palette[hash % palette.length];
+}
+
 // ─── RateModal ────────────────────────────────────────────────────────────────
 
-const SCORE_OPTIONS = Array.from({ length: 19 }, (_, i) =>
-  parseFloat((1.0 + i * 0.5).toFixed(1)),
-);
+const BUCKETS: Bucket[] = ['liked', 'fine', 'disliked'];
+
+type ModalStep = 'search' | 'bucket' | 'saving';
 
 interface RateModalProps {
   visible: boolean;
@@ -130,190 +109,221 @@ interface RateModalProps {
 
 function RateModal({ visible, onClose }: RateModalProps) {
   const { addRating } = useRatingStore();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<CatalogItem[]>(POPULAR_CATALOG.slice(0, 8));
-  const [selectedItem, setSelectedItem] = useState<CatalogItem | null>(null);
-  const [score, setScore] = useState(5.0);
+  const { user, spotifyToken } = useAuthStore();
+
+  const [step, setStep] = useState<ModalStep>('search');
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<MusicItem[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [selected, setSelected] = useState<MusicItem | null>(null);
   const [review, setReview] = useState('');
+  const [duelPair, setDuelPair] = useState<{ a: DuelItem; b: DuelItem } | null>(null);
+  const duelResolveRef = useRef<((winner: 'a' | 'b') => void) | null>(null);
 
-  const handleSearch = useCallback((q: string) => {
-    setSearchQuery(q);
-    setSearchResults(searchCatalog(q).slice(0, 10));
-  }, []);
+  const runSearch = useCallback(
+    async (q: string) => {
+      setQuery(q);
+      if (!q.trim()) {
+        setResults([]);
+        return;
+      }
+      setSearching(true);
+      try {
+        const items = await searchMusic({
+          query: q,
+          types: ['song', 'album'] as ContentType[],
+          accessToken: spotifyToken ?? undefined,
+          limit: 10,
+        });
+        setResults(items);
+      } catch {
+        setResults([]);
+      }
+      setSearching(false);
+    },
+    [spotifyToken]
+  );
 
-  const handleSelectItem = (item: CatalogItem) => {
-    setSelectedItem(item);
-    setScore(5.0);
-    setReview('');
+  const handleSelectItem = (item: MusicItem) => {
+    setSelected(item);
+    setStep('bucket');
   };
 
-  const handlePublish = async () => {
-    if (!selectedItem) return;
-    await addRating({
-      contentId: selectedItem.id,
-      contentName: selectedItem.name,
-      artistName: selectedItem.artist,
-      imageUrl: '',
-      contentType: selectedItem.type,
-      score,
-      emoji: score >= 8 ? 'love' : score >= 5 ? 'like' : 'meh',
-      review: review.trim() || undefined,
+  const handleManualEntry = () => {
+    if (!query.trim()) return;
+    handleSelectItem({
+      id: `manual-${Date.now()}`,
+      type: 'song',
+      name: query,
+      artist_name: 'Artista manual',
+      artist_names: ['Artista manual'],
     });
-    handleClose();
+  };
+
+  const compare: Comparator<RatingEntry> = (a, b) => {
+    return new Promise((resolve) => {
+      setDuelPair({
+        a: { contentId: a.contentId, contentName: a.contentName, artistName: a.artistName, imageUrl: a.imageUrl },
+        b: { contentId: b.contentId, contentName: b.contentName, artistName: b.artistName, imageUrl: b.imageUrl },
+      });
+      duelResolveRef.current = (winner) => {
+        setDuelPair(null);
+        resolve(winner);
+      };
+    });
+  };
+
+  const handlePickBucket = async (bucket: Bucket) => {
+    if (!selected || !user) {
+      Alert.alert('Inicia sesión', 'Necesitas iniciar sesión para calificar.');
+      return;
+    }
+    setStep('saving');
+    const saved = await addRating({
+      userId: user.id,
+      contentType: selected.type,
+      contentId: selected.id,
+      contentName: selected.name,
+      artistName: selected.artist_name,
+      imageUrl: selected.cover_image ?? '',
+      bucket,
+      review: review.trim() || undefined,
+      compare,
+    });
+
+    if (saved) {
+      Alert.alert('¡Calificado!', `"${selected.name}" quedó en ${saved.score.toFixed(1)}`);
+      handleClose();
+    } else {
+      Alert.alert('Error', 'No se pudo guardar la calificación');
+      setStep('bucket');
+    }
   };
 
   const handleClose = () => {
-    setSearchQuery('');
-    setSearchResults(POPULAR_CATALOG.slice(0, 8));
-    setSelectedItem(null);
-    setScore(5.0);
+    setStep('search');
+    setQuery('');
+    setResults([]);
+    setSelected(null);
     setReview('');
+    setDuelPair(null);
+    duelResolveRef.current = null;
     onClose();
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={handleClose}
-    >
-      <KeyboardAvoidingView
-        style={styles.modalContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* Modal header */}
+    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={handleClose}>
+      <KeyboardAvoidingView style={styles.modalContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={styles.modalHeader}>
-          <Text style={styles.modalTitle}>Calificar</Text>
+          <Text style={styles.modalTitle}>
+            {duelPair ? '¿Cuál prefieres?' : step === 'search' ? 'Calificar' : step === 'bucket' ? 'Tu opinión' : 'Guardando...'}
+          </Text>
           <TouchableOpacity onPress={handleClose} activeOpacity={0.7} hitSlop={12}>
             <Ionicons name="close" size={24} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
 
-        <ScrollView
-          style={styles.modalScroll}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {!selectedItem ? (
-            <>
-              {/* Search input */}
-              <View style={styles.searchBar}>
-                <Ionicons name="search-outline" size={18} color="#666666" />
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder="Busca canciones o albums..."
-                  placeholderTextColor="#666666"
-                  value={searchQuery}
-                  onChangeText={handleSearch}
-                  autoFocus
-                />
-              </View>
-
-              {/* Results list */}
-              <Text style={styles.sectionLabel}>
-                {searchQuery.trim() ? 'Resultados' : 'Populares'}
-              </Text>
-              {searchResults.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.catalogRow}
-                  onPress={() => handleSelectItem(item)}
-                  activeOpacity={0.7}
-                >
-                  <View style={[styles.catalogCover, { backgroundColor: item.coverColor }]}>
-                    <Text style={styles.catalogInitial}>{item.coverInitial}</Text>
-                  </View>
-                  <View style={styles.catalogInfo}>
-                    <Text style={styles.catalogName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.catalogArtist} numberOfLines={1}>
-                      {item.artist} · {item.type === 'album' ? 'Album' : 'Cancion'}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#444444" />
-                </TouchableOpacity>
-              ))}
-            </>
-          ) : (
-            <>
-              {/* Selected item header */}
-              <View style={styles.selectedHeader}>
-                <View style={[styles.selectedCover, { backgroundColor: selectedItem.coverColor }]}>
-                  <Text style={styles.selectedInitial}>{selectedItem.coverInitial}</Text>
+        {duelPair ? (
+          <CompareDuel
+            itemA={duelPair.a}
+            itemB={duelPair.b}
+            onPick={(winner) => duelResolveRef.current?.(winner)}
+          />
+        ) : (
+          <ScrollView style={styles.modalScroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {step === 'search' && (
+              <>
+                <View style={styles.searchBar}>
+                  <Ionicons name="search-outline" size={18} color="#666666" />
+                  <TextInput
+                    style={styles.searchInput}
+                    placeholder="Busca canciones o álbumes..."
+                    placeholderTextColor="#666666"
+                    value={query}
+                    onChangeText={runSearch}
+                    autoFocus
+                  />
+                  {searching && <ActivityIndicator size="small" color="#A855F7" />}
                 </View>
-                <View style={styles.selectedInfo}>
-                  <Text style={styles.selectedName} numberOfLines={1}>
-                    {selectedItem.name}
-                  </Text>
-                  <Text style={styles.selectedArtist}>{selectedItem.artist}</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setSelectedItem(null)}
-                  activeOpacity={0.7}
-                  hitSlop={12}
-                >
-                  <Ionicons name="close-circle" size={22} color="#555555" />
-                </TouchableOpacity>
-              </View>
 
-              {/* Score display */}
-              <View style={styles.scoreDisplay}>
-                <Text style={[styles.scoreNumber, { color: scoreColor(score) }]}>
-                  {formatScore(score)}
-                </Text>
-                <Text style={styles.scoreLabel}>/ 10</Text>
-              </View>
-
-              {/* Score picker */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.scorePicker}
-                contentContainerStyle={styles.scorePickerContent}
-              >
-                {SCORE_OPTIONS.map((s) => {
-                  const active = s === score;
-                  return (
-                    <TouchableOpacity
-                      key={s}
-                      style={[styles.scoreChip, active && styles.scoreChipActive]}
-                      onPress={() => setScore(s)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={[styles.scoreChipText, active && styles.scoreChipTextActive]}>
-                        {formatScore(s)}
+                <Text style={styles.sectionLabel}>Resultados</Text>
+                {results.map((item) => (
+                  <TouchableOpacity key={item.id} style={styles.catalogRow} onPress={() => handleSelectItem(item)} activeOpacity={0.7}>
+                    <View style={[styles.catalogCover, { backgroundColor: Colors_fallback(item.id) }]}>
+                      <Text style={styles.catalogInitial}>{item.name.charAt(0).toUpperCase()}</Text>
+                    </View>
+                    <View style={styles.catalogInfo}>
+                      <Text style={styles.catalogName} numberOfLines={1}>{item.name}</Text>
+                      <Text style={styles.catalogArtist} numberOfLines={1}>
+                        {item.artist_name} · {item.type === 'album' ? 'Álbum' : 'Canción'}
                       </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#444444" />
+                  </TouchableOpacity>
+                ))}
+
+                {query.trim().length > 0 && (
+                  <TouchableOpacity style={styles.manualEntry} onPress={handleManualEntry} activeOpacity={0.7}>
+                    <Ionicons name="add-circle-outline" size={18} color="#A855F7" />
+                    <Text style={styles.manualText}>Agregar "{query}" manualmente</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            {step === 'bucket' && selected && (
+              <>
+                <View style={styles.selectedHeader}>
+                  <View style={[styles.selectedCover, { backgroundColor: Colors_fallback(selected.id) }]}>
+                    <Text style={styles.selectedInitial}>{selected.name.charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.selectedInfo}>
+                    <Text style={styles.selectedName} numberOfLines={1}>{selected.name}</Text>
+                    <Text style={styles.selectedArtist}>{selected.artist_name}</Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setSelected(null);
+                      setStep('search');
+                    }}
+                    activeOpacity={0.7}
+                    hitSlop={12}
+                  >
+                    <Ionicons name="close-circle" size={22} color="#555555" />
+                  </TouchableOpacity>
+                </View>
+
+                <Text style={styles.sectionLabel}>¿Qué te pareció?</Text>
+                <View style={styles.bucketGrid}>
+                  {BUCKETS.map((b) => (
+                    <TouchableOpacity key={b} style={styles.bucketBtn} onPress={() => handlePickBucket(b)} activeOpacity={0.8}>
+                      <Text style={styles.bucketBtnText}>{BUCKET_LABELS[b]}</Text>
                     </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+                  ))}
+                </View>
 
-              {/* Review input */}
-              <Text style={styles.sectionLabel}>Resena (opcional)</Text>
-              <TextInput
-                style={styles.reviewInput}
-                placeholder="Que te parecio?"
-                placeholderTextColor="#555555"
-                value={review}
-                onChangeText={setReview}
-                multiline
-                numberOfLines={3}
-                textAlignVertical="top"
-              />
+                <Text style={styles.sectionLabel}>Reseña (opcional)</Text>
+                <TextInput
+                  style={styles.reviewInput}
+                  placeholder="¿Qué te pareció?"
+                  placeholderTextColor="#555555"
+                  value={review}
+                  onChangeText={setReview}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
+                />
+              </>
+            )}
 
-              {/* Publish button */}
-              <TouchableOpacity
-                style={styles.publishBtn}
-                onPress={handlePublish}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.publishBtnText}>Publicar</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </ScrollView>
+            {step === 'saving' && (
+              <View style={styles.savingBox}>
+                <ActivityIndicator size="large" color="#A855F7" />
+                <Text style={styles.savingText}>Comparando con tus otras calificaciones...</Text>
+              </View>
+            )}
+          </ScrollView>
+        )}
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -321,145 +331,72 @@ function RateModal({ visible, onClose }: RateModalProps) {
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
-function ratingEntryToFeedRating(entry: RatingEntry): FeedRating {
-  return {
-    id: `local-${entry.id}`,
-    userId: 'me',
-    contentId: entry.contentId,
-    contentType: entry.contentType === 'podcast' ? 'track' : entry.contentType,
-    contentName: entry.contentName,
-    artistName: entry.artistName,
-    coverColor: '#A855F7',
-    coverInitial: entry.contentName.charAt(0).toUpperCase(),
-    score: entry.score,
-    review: entry.review,
-    likeCount: 0,
-    likedByMe: false,
-    createdAt: entry.createdAt,
-    user: {
-      displayName: 'Tu',
-      username: 'yo',
-      initials: 'YO',
-      avatarColor: '#A855F7',
-    },
-  };
-}
-
-function buildFeed(localRatings: RatingEntry[]): FeedRating[] {
-  const communityFeed: FeedRating[] = MOCK_RATINGS.map((r) => {
-    const u = getUserById(r.userId);
-    return {
-      ...r,
-      user: u
-        ? {
-            displayName: u.displayName,
-            username: u.username,
-            initials: u.initials,
-            avatarColor: u.avatarColor,
-          }
-        : { displayName: 'Usuario', username: 'user', initials: 'U', avatarColor: '#555555' },
-    };
-  });
-
-  const myFeed: FeedRating[] = localRatings.map(ratingEntryToFeedRating);
-
-  const all = [...myFeed, ...communityFeed];
-  all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  return all;
-}
-
 export default function FeedScreen() {
-  const { ratings, loadRatings } = useRatingStore();
-  const [feed, setFeed] = useState<FeedRating[]>([]);
+  const { feed, loadingFeed, loadFeed } = useRatingStore();
   const [refreshing, setRefreshing] = useState(false);
   const [rateModalVisible, setRateModalVisible] = useState(false);
   const [localLiked, setLocalLiked] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    loadRatings();
+    loadFeed();
   }, []);
-
-  useEffect(() => {
-    setFeed(buildFeed(ratings));
-  }, [ratings]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadRatings();
+    await loadFeed();
     setRefreshing(false);
   };
 
   const toggleLike = (id: string) => {
     setLocalLiked((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
 
-  const renderItem = ({ item }: { item: FeedRating }) => (
-    <FeedCard
-      item={item}
-      liked={localLiked.has(item.id) ? !item.likedByMe : item.likedByMe}
-      onToggleLike={toggleLike}
-    />
+  const renderItem = ({ item }: { item: FeedEntry }) => (
+    <FeedCard entry={item} liked={localLiked.has(item.rating.id)} onToggleLike={toggleLike} />
   );
 
-  const ListEmpty = () => (
-    <View style={styles.empty}>
-      <Ionicons name="musical-notes-outline" size={56} color="#2A2A2A" />
-      <Text style={styles.emptyTitle}>El feed esta vacio</Text>
-      <Text style={styles.emptySubtitle}>
-        Sigue a gente con tu mismo gusto musical para ver sus calificaciones
-      </Text>
-    </View>
-  );
+  const ListEmpty = () =>
+    loadingFeed ? (
+      <View style={styles.empty}>
+        <ActivityIndicator color="#A855F7" />
+      </View>
+    ) : (
+      <View style={styles.empty}>
+        <Ionicons name="musical-notes-outline" size={56} color="#2A2A2A" />
+        <Text style={styles.emptyTitle}>El feed está vacío</Text>
+        <Text style={styles.emptySubtitle}>Sé el primero en calificar algo, o sigue a gente con tu mismo gusto musical.</Text>
+      </View>
+    );
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Fixed header */}
       <View style={styles.header}>
         <Text style={styles.logo}>Sonet</Text>
         <TouchableOpacity activeOpacity={0.7} hitSlop={12}>
-          <Ionicons name="bell-outline" size={22} color="#666666" />
+          <Ionicons name="notifications-outline" size={22} color="#666666" />
         </TouchableOpacity>
       </View>
 
-      {/* Feed */}
       <FlatList
         data={feed}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.rating.id}
         renderItem={renderItem}
         ListEmptyComponent={<ListEmpty />}
         contentContainerStyle={feed.length === 0 ? styles.emptyContainer : styles.listContent}
         showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            tintColor="#A855F7"
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#A855F7" />}
       />
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setRateModalVisible(true)}
-        activeOpacity={0.85}
-      >
+      <TouchableOpacity style={styles.fab} onPress={() => setRateModalVisible(true)} activeOpacity={0.85}>
         <Ionicons name="add" size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      {/* Rate modal */}
-      <RateModal
-        visible={rateModalVisible}
-        onClose={() => setRateModalVisible(false)}
-      />
+      <RateModal visible={rateModalVisible} onClose={() => setRateModalVisible(false)} />
     </SafeAreaView>
   );
 }
@@ -467,12 +404,8 @@ export default function FeedScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0D0D0D',
-  },
+  container: { flex: 1, backgroundColor: '#0D0D0D' },
 
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -482,171 +415,43 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#2A2A2A',
   },
-  logo: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#A855F7',
-  },
+  logo: { fontSize: 24, fontWeight: '700', color: '#A855F7' },
 
-  // List
-  listContent: {
-    paddingVertical: 8,
-    paddingBottom: 100,
-  },
-  emptyContainer: {
-    flex: 1,
-  },
-  empty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 40,
-    gap: 12,
-    marginTop: 80,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: '#666666',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
+  listContent: { paddingVertical: 8, paddingBottom: 100 },
+  emptyContainer: { flex: 1 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40, gap: 12, marginTop: 80 },
+  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
+  emptySubtitle: { fontSize: 14, color: '#666666', textAlign: 'center', lineHeight: 20 },
 
-  // Card
-  card: {
-    backgroundColor: '#1A1A1A',
-    borderRadius: 12,
-    marginHorizontal: 16,
-    marginVertical: 6,
-    padding: 16,
-  },
-  cardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  contentRow: {
-    marginTop: 12,
-    alignItems: 'flex-start',
-  },
+  card: { backgroundColor: '#1A1A1A', borderRadius: 12, marginHorizontal: 16, marginVertical: 6, padding: 16 },
+  cardRow: { flexDirection: 'row', alignItems: 'center' },
+  contentRow: { marginTop: 12, alignItems: 'flex-start' },
 
-  // Avatar
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  avatarText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+  avatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 10 },
+  avatarText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
 
-  // User meta
-  userCol: {
-    flex: 1,
-  },
-  displayName: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  userMeta: {
-    color: '#666666',
-    fontSize: 13,
-    marginTop: 1,
-  },
+  userCol: { flex: 1 },
+  displayName: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  userMeta: { color: '#666666', fontSize: 13, marginTop: 1 },
 
-  // Cover
-  cover: {
-    width: 48,
-    height: 48,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  coverInitial: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 18,
-  },
+  cover: { width: 48, height: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  coverInitial: { color: '#FFFFFF', fontWeight: '700', fontSize: 18 },
 
-  // Content info
-  contentCol: {
-    flex: 1,
-  },
-  contentName: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  artistName: {
-    color: '#888888',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  contentType: {
-    color: '#555555',
-    fontSize: 11,
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
+  contentCol: { flex: 1 },
+  contentName: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  artistName: { color: '#888888', fontSize: 13, marginTop: 2 },
+  contentType: { color: '#555555', fontSize: 11, marginTop: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  // Score badge
-  scoreBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-  },
-  scoreText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
+  scoreBadge: { width: 44, height: 44, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginLeft: 8 },
+  scoreText: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
 
-  // Review
-  review: {
-    color: '#888888',
-    fontSize: 14,
-    fontStyle: 'italic',
-    marginTop: 10,
-    lineHeight: 20,
-  },
+  review: { color: '#888888', fontSize: 14, fontStyle: 'italic', marginTop: 10, lineHeight: 20 },
 
-  // Actions
-  actionsRow: {
-    flexDirection: 'row',
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#242424',
-  },
-  likeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  likeCount: {
-    color: '#666666',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  likeCountActive: {
-    color: '#F43F5E',
-  },
+  actionsRow: { flexDirection: 'row', marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#242424' },
+  likeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  likeCount: { color: '#666666', fontSize: 13, fontWeight: '500' },
+  likeCountActive: { color: '#F43F5E' },
 
-  // FAB
   fab: {
     position: 'absolute',
     bottom: 100,
@@ -664,11 +469,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
 
-  // Modal
-  modalContainer: {
-    flex: 1,
-    backgroundColor: '#0D0D0D',
-  },
+  modalContainer: { flex: 1, backgroundColor: '#0D0D0D' },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -678,16 +479,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#2A2A2A',
   },
-  modalTitle: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 18,
-  },
-  modalScroll: {
-    flex: 1,
-  },
+  modalTitle: { color: '#FFFFFF', fontWeight: '700', fontSize: 18 },
+  modalScroll: { flex: 1 },
 
-  // Search
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -701,11 +495,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     gap: 10,
   },
-  searchInput: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 15,
-  },
+  searchInput: { flex: 1, color: '#FFFFFF', fontSize: 15 },
   sectionLabel: {
     color: '#555555',
     fontSize: 11,
@@ -717,7 +507,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
-  // Catalog rows
   catalogRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -726,34 +515,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#1A1A1A',
   },
-  catalogCover: {
-    width: 44,
-    height: 44,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  catalogInitial: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-  catalogInfo: {
-    flex: 1,
-  },
-  catalogName: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  catalogArtist: {
-    color: '#666666',
-    fontSize: 12,
-    marginTop: 2,
-  },
+  catalogCover: { width: 44, height: 44, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  catalogInitial: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  catalogInfo: { flex: 1 },
+  catalogName: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
+  catalogArtist: { color: '#666666', fontSize: 12, marginTop: 2 },
 
-  // Selected item
+  manualEntry: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 14 },
+  manualText: { color: '#A855F7', fontSize: 14 },
+
   selectedHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -763,80 +533,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#1A1A1A',
     borderRadius: 12,
   },
-  selectedCover: {
-    width: 52,
-    height: 52,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  selectedInitial: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 20,
-  },
-  selectedInfo: {
+  selectedCover: { width: 52, height: 52, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  selectedInitial: { color: '#FFFFFF', fontWeight: '700', fontSize: 20 },
+  selectedInfo: { flex: 1 },
+  selectedName: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  selectedArtist: { color: '#888888', fontSize: 13, marginTop: 2 },
+
+  bucketGrid: { flexDirection: 'row', gap: 10, marginHorizontal: 20, marginTop: 4 },
+  bucketBtn: {
     flex: 1,
-  },
-  selectedName: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  selectedArtist: {
-    color: '#888888',
-    fontSize: 13,
-    marginTop: 2,
-  },
-
-  // Score display
-  scoreDisplay: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'center',
-    marginTop: 24,
-    gap: 6,
-  },
-  scoreNumber: {
-    fontSize: 48,
-    fontWeight: '800',
-  },
-  scoreLabel: {
-    fontSize: 22,
-    color: '#444444',
-    fontWeight: '600',
-  },
-
-  // Score picker
-  scorePicker: {
-    marginTop: 16,
-  },
-  scorePickerContent: {
-    paddingHorizontal: 20,
-    gap: 8,
-  },
-  scoreChip: {
-    width: 52,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: '#2A2A2A',
+    backgroundColor: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingVertical: 16,
     alignItems: 'center',
-    justifyContent: 'center',
   },
-  scoreChipActive: {
-    backgroundColor: '#A855F7',
-  },
-  scoreChipText: {
-    color: '#888888',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  scoreChipTextActive: {
-    color: '#FFFFFF',
-  },
+  bucketBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 13, textAlign: 'center' },
 
-  // Review input
   reviewInput: {
     backgroundColor: '#1A1A1A',
     borderWidth: 1,
@@ -848,21 +562,9 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     minHeight: 90,
     lineHeight: 20,
+    marginBottom: 40,
   },
 
-  // Publish button
-  publishBtn: {
-    backgroundColor: '#A855F7',
-    borderRadius: 12,
-    paddingVertical: 16,
-    marginHorizontal: 20,
-    marginTop: 20,
-    marginBottom: 40,
-    alignItems: 'center',
-  },
-  publishBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
-  },
+  savingBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 80, gap: 16 },
+  savingText: { color: '#888888', fontSize: 14, textAlign: 'center', paddingHorizontal: 40 },
 });

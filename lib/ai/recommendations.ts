@@ -124,13 +124,13 @@ function buildReason(
   artistName: string,
   popularity: number,
 ): string {
-  if (isLikedArtist) return `🎯 Te encanta ${artistName} — esta te va a gustar`;
-  if (v.energy > 0.75) return '⚡ Alta energía que encaja con tu perfil';
-  if (v.valence > 0.7) return '😄 Mood alegre que coincide con tu gusto';
-  if (v.danceability > 0.75) return '💃 Ritmo bailable perfecto para ti';
-  if (v.genre_latin > 0.3) return '🌮 Sabor latino que resena con tu perfil';
-  if (popularity < 40) return '💎 Joya oculta que creemos que vas a amar';
-  return '🎵 Selección especial basada en tu DNA musical';
+  if (isLikedArtist) return `Te encanta ${artistName} — esta te va a gustar`;
+  if (v.energy > 0.75) return 'Alta energía que encaja con tu perfil';
+  if (v.valence > 0.7) return 'Mood alegre que coincide con tu gusto';
+  if (v.danceability > 0.75) return 'Ritmo bailable perfecto para ti';
+  if (v.genre_latin > 0.3) return 'Sabor latino que resena con tu perfil';
+  if (popularity < 40) return 'Joya oculta que creemos que vas a amar';
+  return 'Selección especial basada en tu DNA musical';
 }
 
 function vectorToSpotifyTarget(v: MusicVector): Record<string, string> {

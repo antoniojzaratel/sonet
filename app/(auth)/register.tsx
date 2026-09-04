@@ -59,7 +59,31 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [birthDay, setBirthDay] = useState('');
+  const [birthMonth, setBirthMonth] = useState('');
+  const [birthYear, setBirthYear] = useState('');
   const [loading, setLoading] = useState(false);
+
+  /** Returns the birthdate as an ISO date string, or null if it's not a real date. */
+  const parseBirthdate = (): string | null => {
+    const day = parseInt(birthDay, 10);
+    const month = parseInt(birthMonth, 10);
+    const year = parseInt(birthYear, 10);
+    if (!day || !month || !year) return null;
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const isRealDate =
+      date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+    if (!isRealDate) return null;
+
+    return date.toISOString().slice(0, 10);
+  };
+
+  const isAtLeast18 = (isoDate: string): boolean => {
+    const birth = new Date(isoDate);
+    const eighteenthBirthday = new Date(Date.UTC(birth.getUTCFullYear() + 18, birth.getUTCMonth(), birth.getUTCDate()));
+    return eighteenthBirthday.getTime() <= Date.now();
+  };
 
   const handleRegister = async () => {
     if (isDemoMode) {
@@ -80,6 +104,16 @@ export default function RegisterScreen() {
       return;
     }
 
+    const birthdate = parseBirthdate();
+    if (!birthdate) {
+      Alert.alert('Error', 'Ingresa una fecha de nacimiento válida');
+      return;
+    }
+    if (!isAtLeast18(birthdate)) {
+      Alert.alert('Sonet es para mayores de 18', 'No podemos crear tu cuenta — tienes que ser mayor de edad para usar Sonet.');
+      return;
+    }
+
     setLoading(true);
     const { data, error } = await supabase.auth.signUp({ email, password });
 
@@ -95,6 +129,7 @@ export default function RegisterScreen() {
         id: data.user.id,
         display_name: username,
         username: cleanUsername,
+        birthdate,
         followers_count: 0,
         following_count: 0,
         ratings_count: 0,
@@ -161,6 +196,40 @@ export default function RegisterScreen() {
             autoCapitalize="none"
             secureTextEntry
           />
+
+          <Text style={styles.birthdateLabel}>Fecha de nacimiento — solo mayores de 18</Text>
+          <View style={styles.birthdateRow}>
+            <TextInput
+              style={styles.birthdateInput}
+              placeholder="DD"
+              placeholderTextColor={C.textSecondary}
+              value={birthDay}
+              onChangeText={(t) => setBirthDay(t.replace(/[^0-9]/g, '').slice(0, 2))}
+              keyboardType="number-pad"
+              maxLength={2}
+              accessibilityLabel="Día de nacimiento"
+            />
+            <TextInput
+              style={styles.birthdateInput}
+              placeholder="MM"
+              placeholderTextColor={C.textSecondary}
+              value={birthMonth}
+              onChangeText={(t) => setBirthMonth(t.replace(/[^0-9]/g, '').slice(0, 2))}
+              keyboardType="number-pad"
+              maxLength={2}
+              accessibilityLabel="Mes de nacimiento"
+            />
+            <TextInput
+              style={[styles.birthdateInput, styles.birthdateYear]}
+              placeholder="AAAA"
+              placeholderTextColor={C.textSecondary}
+              value={birthYear}
+              onChangeText={(t) => setBirthYear(t.replace(/[^0-9]/g, '').slice(0, 4))}
+              keyboardType="number-pad"
+              maxLength={4}
+              accessibilityLabel="Año de nacimiento"
+            />
+          </View>
 
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.primaryButtonDisabled]}
@@ -242,6 +311,30 @@ const styles = StyleSheet.create({
     flex: 1,
     color: C.text,
     fontSize: 15,
+  },
+  birthdateLabel: {
+    color: C.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
+    marginBottom: -2,
+  },
+  birthdateRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  birthdateInput: {
+    flex: 1,
+    height: 52,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: C.border,
+    backgroundColor: C.surface,
+    color: C.text,
+    fontSize: 16,
+    textAlign: 'center',
+  },
+  birthdateYear: {
+    flex: 1.4,
   },
   primaryButton: {
     height: 52,

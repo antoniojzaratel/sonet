@@ -48,7 +48,7 @@ export function MatchCard({ match }: Props) {
         <Text style={[styles.matchLabel, { color: matchColor }]}>{matchLabel}</Text>
         {shared_artists.length > 0 && (
           <Text style={styles.shared} numberOfLines={1}>
-            🎵 {shared_artists.slice(0, 3).join(', ')}
+             {shared_artists.slice(0, 3).join(', ')}
           </Text>
         )}
       </View>

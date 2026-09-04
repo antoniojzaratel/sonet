@@ -5,12 +5,12 @@ import { scoreToColor, formatRelativeTime } from '@/lib/utils';
 import type { Rating } from '@/types';
 
 const TYPE_EMOJI: Record<string, string> = {
-  song: '🎵',
-  album: '💿',
-  podcast: '🎙️',
-  single: '🎶',
-  concert: '🎤',
-  music_video: '🎬',
+  song: '',
+  album: '',
+  podcast: '️',
+  single: '',
+  concert: '',
+  music_video: '',
 };
 
 interface Props {
@@ -28,7 +28,7 @@ export function RatingCard({ rating, compact = false }: Props) {
       )}
       {!rating.content_image && (
         <View style={[styles.imagePlaceholder, { backgroundColor: `${scoreColor}20` }]}>
-          <Text style={styles.typeEmoji}>{TYPE_EMOJI[rating.content_type] || '🎵'}</Text>
+          <Text style={styles.typeEmoji}>{TYPE_EMOJI[rating.content_type] || ''}</Text>
         </View>
       )}
 

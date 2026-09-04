@@ -10,15 +10,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { checkIsAdmin } from '@/lib/admin';
 import { useRatingStore } from '@/stores/ratingStore';
 import { useAuthStore } from '@/stores/authStore';
 import { scoreToColor as scoreColor, formatScore } from '@/lib/utils';
 import { MusicDashboard } from '@/components/dashboard/MusicDashboard';
+import { ListeningStats } from '@/components/dashboard/ListeningStats';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { isDemoMode } from '@/hooks/useAuth';
 import { useSpotifyAuth, fetchSpotifyProfile } from '@/lib/spotify';
+import { CoverImage } from '@/components/CoverImage';
+import { DEMO_USER_ID, DEMO_CONCERT_HISTORY } from '@/lib/demoContent';
 import type { RatingEntry } from '@/stores/ratingStore';
 
 type Tab = 'ratings' | 'top10' | 'stats';
@@ -62,11 +67,7 @@ function RatingRow({ entry, showRank, rank }: { entry: RatingEntry; showRank?: b
       {showRank && (
         <Text style={styles.rankNumber}>{rank}.</Text>
       )}
-      <View style={styles.coverBox}>
-        <Text style={styles.coverInitial}>
-          {entry.contentName[0]?.toUpperCase() ?? '?'}
-        </Text>
-      </View>
+      <CoverImage uri={entry.imageUrl} seed={entry.contentName} size={44} radius={8} style={styles.coverBox} />
       <View style={styles.ratingInfo}>
         <Text style={styles.ratingTitle} numberOfLines={1}>{entry.contentName}</Text>
         <Text style={styles.ratingArtist} numberOfLines={1}>{entry.artistName}</Text>
@@ -84,10 +85,17 @@ export default function ProfileScreen() {
   const [activeTab, setActiveTab] = useState<Tab>('ratings');
   const [bio, setBio] = useState<string>('Sin bio aun');
   const [connectingSpotify, setConnectingSpotify] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
 
-  const { user, spotifyToken, setSpotifyToken, setSpotifyRefreshToken, fetchProfile } = useAuthStore();
+  const router = useRouter();
+  const { user, spotifyToken, setSpotifyToken, setSpotifyRefreshToken, fetchProfile, signOut } = useAuthStore();
   const { ratings, loading, loadRatings, getTopRated, getStats } = useRatingStore();
   const { request, response, promptAsync, exchangeCode } = useSpotifyAuth();
+
+  useEffect(() => {
+    if (user?.id) checkIsAdmin(user.id).then(setIsAdmin);
+  }, [user?.id]);
 
   useEffect(() => {
     if (user?.id) loadRatings(user.id);
@@ -153,6 +161,39 @@ export default function ProfileScreen() {
     }
     promptAsync();
   }, [request, promptAsync]);
+
+  const handleDeleteAccount = useCallback(() => {
+    Alert.alert(
+      'Eliminar cuenta',
+      'Esto borra tu perfil, calificaciones, mensajes, historias y toda tu actividad de forma permanente. No se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Continuar',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('¿Estás seguro?', 'Última confirmación — tu cuenta se eliminará ahora mismo.', [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: 'Eliminar cuenta',
+                style: 'destructive',
+                onPress: async () => {
+                  setDeleting(true);
+                  const { error } = await supabase.rpc('delete_own_account');
+                  setDeleting(false);
+                  if (error) {
+                    Alert.alert('Error', 'No se pudo eliminar tu cuenta. Intenta de nuevo.');
+                    return;
+                  }
+                  await signOut();
+                },
+              },
+            ]);
+          },
+        },
+      ],
+    );
+  }, [signOut]);
 
   const sortedRatings = [...ratings].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
@@ -291,10 +332,68 @@ export default function ProfileScreen() {
               </View>
             </View>
 
-            {/* Dashboard charts */}
+            {/* Real Spotify listening stats — top artists/tracks/genres per
+                time range, audio DNA, real in-app activity */}
+            {user?.id && (
+              <>
+                <Text style={styles.sectionHeading}>Tu Spotify</Text>
+                <ListeningStats userId={user.id} spotifyToken={spotifyToken} />
+              </>
+            )}
+
+            {/* Concert history — demo account only for now; a real user's
+                history lives in concert_attendance (map.tsx), out of scope
+                here to avoid duplicating that fork's in-flight work. */}
+            {user?.id === DEMO_USER_ID && (
+              <>
+                <Text style={styles.sectionHeading}>Tus conciertos ({DEMO_CONCERT_HISTORY.length})</Text>
+                <View style={styles.concertList}>
+                  {DEMO_CONCERT_HISTORY.map((c) => (
+                    <View key={c.id} style={styles.concertRow}>
+                      <View style={styles.concertIconWrap}>
+                        <Ionicons name="location" size={16} color={Colors.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.concertName} numberOfLines={1}>{c.name}</Text>
+                        <Text style={styles.concertMeta} numberOfLines={1}>
+                          {c.city}, {c.country} · {new Date(c.date).toLocaleDateString('es-MX', { month: 'short', year: 'numeric' })}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+
+            {/* Rating-habit charts (distinct from listening stats above —
+                this is about what you've rated, not what you've played) */}
+            <Text style={styles.sectionHeading}>Tus calificaciones</Text>
             <MusicDashboard ratings={dashboardRatings} />
           </View>
         )}
+
+        {isAdmin && (
+          <TouchableOpacity
+            style={styles.adminLink}
+            // `as any`: expo-router's typed-routes union regenerates from disk on
+            // the next `expo start`/build — it just hasn't seen this brand-new
+            // route yet in this no-dev-server session.
+            onPress={() => router.push('/admin/reports' as any)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="shield-checkmark-outline" size={16} color={Colors.primary} />
+            <Text style={styles.adminLinkText}>Moderación</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Danger zone */}
+        <View style={styles.dangerZone}>
+          <TouchableOpacity onPress={handleDeleteAccount} disabled={deleting} activeOpacity={0.7}>
+            <Text style={styles.deleteAccountText}>
+              {deleting ? 'Eliminando cuenta...' : 'Eliminar cuenta'}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         <View style={{ height: 48 }} />
       </ScrollView>
@@ -429,6 +528,36 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
   },
+  sectionHeading: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#666',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+    marginBottom: 10,
+    marginTop: 4,
+  },
+
+  // Concert history
+  concertList: { gap: 8, marginBottom: 20 },
+  concertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 10,
+    padding: 10,
+  },
+  concertIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#2A2A2A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  concertName: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  concertMeta: { color: '#888', fontSize: 11, marginTop: 1 },
 
   // Rating row
   ratingRow: {
@@ -551,5 +680,33 @@ const styles = StyleSheet.create({
     height: 40,
     backgroundColor: '#2A2A2A',
     alignSelf: 'center',
+  },
+
+  // Danger zone
+  adminLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'center',
+    marginTop: 24,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  adminLinkText: { color: Colors.primary, fontSize: 13, fontWeight: '600' },
+  dangerZone: {
+    marginTop: 32,
+    paddingTop: 20,
+    marginHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#1E1E1E',
+    alignItems: 'center',
+  },
+  deleteAccountText: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

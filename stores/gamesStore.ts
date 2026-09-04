@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
-import { puzzleForDate, todayDateString, dateOffsetString, MAX_ATTEMPTS, type PuzzleContentType } from '@/lib/dailyGame';
+import { useAuthStore } from '@/stores/authStore';
+import { puzzleForDate, todayDateString, dateOffsetString, MAX_ATTEMPTS, type PuzzleContentType, type PuzzleSeed } from '@/lib/dailyGame';
 
 export interface GuessRecord {
   text: string;
@@ -52,17 +53,38 @@ function emptyAttempt(date: string): GameAttemptState {
   return { date, guesses: [], solved: false, attemptCount: 0, streak: 0 };
 }
 
+// Demo mode never touches Supabase — the puzzle seed is deterministic
+// locally anyway, this just stashes it so submitGuess can check answers
+// without the check_daily_guess RPC.
+let demoSeed: PuzzleSeed | null = null;
+
+function checkGuessLocally(seed: PuzzleSeed, guess: string): boolean {
+  const g = guess.trim().toLowerCase();
+  return g === seed.answerId.trim().toLowerCase() || g === seed.answerName.trim().toLowerCase();
+}
+
 export const useGamesStore = create<GamesState>((set, get) => ({
   puzzle: null,
   attempt: null,
   loading: false,
-  stats: { currentStreak: 0, bestStreak: 0, totalSolved: 0 },
+  stats: { currentStreak: 3, bestStreak: 7, totalSolved: 12 },
   loadingStats: false,
 
   loadToday: async (userId) => {
     set({ loading: true });
     const date = todayDateString();
     const seed = puzzleForDate(date);
+
+    if (useAuthStore.getState().isRichDemo) {
+      demoSeed = seed;
+      const existing = get().attempt;
+      set({
+        puzzle: { date, contentType: seed.contentType, hints: seed.hints },
+        attempt: existing?.date === date ? existing : emptyAttempt(date),
+        loading: false,
+      });
+      return;
+    }
 
     // Every client derives the same seed for `date`, so this is safe to
     // race — the first writer wins and everyone else is a no-op.
@@ -105,6 +127,16 @@ export const useGamesStore = create<GamesState>((set, get) => ({
     const { attempt } = get();
     if (!attempt || attempt.solved || attempt.attemptCount >= MAX_ATTEMPTS) {
       return { correct: false, answerName: null };
+    }
+
+    if (useAuthStore.getState().isRichDemo && demoSeed) {
+      const correct = checkGuessLocally(demoSeed, guessText);
+      const guesses = [...attempt.guesses, { text: guessText, correct }];
+      const attemptCount = attempt.attemptCount + 1;
+      const solved = correct;
+      const streak = solved ? attempt.streak + 1 : attempt.streak;
+      set({ attempt: { date: attempt.date, guesses, solved, attemptCount, streak } });
+      return { correct, answerName: correct ? demoSeed.answerName : null };
     }
 
     const { data, error } = await supabase.rpc('check_daily_guess', {
@@ -153,6 +185,7 @@ export const useGamesStore = create<GamesState>((set, get) => ({
   },
 
   loadStats: async (userId) => {
+    if (useAuthStore.getState().isRichDemo) return; // pre-seeded default stats already in place
     set({ loadingStats: true });
     const { data } = await supabase
       .from('game_attempts')

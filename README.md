@@ -8,7 +8,7 @@
 
 ---
 
-## 🚀 Setup Rápido (para el demo del sábado)
+## 🚀 Setup Rápido (para el demo del domingo)
 
 ```bash
 # 1. Clonar y entrar
@@ -56,6 +56,10 @@ Agregar en Spotify Developer Dashboard:
 - `sonet://auth/callback`
 - `exp://127.0.0.1:8081/--/auth/callback` (para Expo Go en dev)
 
+### Nota sobre probar login en Expo Go
+
+`stores/authStore.ts` y `lib/spotify.ts` fuerzan el esquema `sonet://` en `AuthSession.makeRedirectUri` — correcto para un build real (EAS/dev client), pero significa que el login con Google/Apple/Spotify **no completará el regreso a la app dentro de Expo Go**, porque Expo Go no es dueño de ese esquema. Esto ya no es una limitación nueva: `expo-audio`, `expo-notifications` (push remoto), `expo-location` y `react-native-maps` tampoco funcionan completamente en Expo Go a partir de este sprint — para probar el flujo completo, usa un dev client (`npx expo run:ios` / `npx expo run:android`) o un build de EAS, no Expo Go.
+
 ---
 
 ## 🔒 Manual — Cuentas y Setup Externo (fuera del alcance de este repo)
@@ -66,24 +70,27 @@ Esto es lo que **tú** tienes que hacer con tus propias cuentas — no es códig
 |------|-------|-------|
 | Crear proyecto Supabase | supabase.com | Plan gratuito alcanza para el demo. Corre `supabase/schema.sql` completo en el SQL Editor. |
 | App de Spotify Developer | developer.spotify.com/dashboard | Redirect URIs de arriba. Client ID va en `.env.local`. |
-| API key de Ticketmaster | developer.ticketmaster.com | Solo necesario si activas Map con datos reales (fuera del corte de este sprint). |
+| API key de Ticketmaster | developer.ticketmaster.com | El mapa de conciertos reales y el deck de Hitster/juegos lo usan — sin esta key, esas pantallas degradan mostrando solo eventos de comunidad / modo silencioso, no se caen. |
 | API key de YouTube (opcional) | console.cloud.google.com | Solo si quieres videos musicales reales. |
-| Habilitar Google OAuth | Google Cloud Console → OAuth consent screen + credenciales | Pega el callback URL que te da Supabase. |
+| Habilitar Google OAuth | Google Cloud Console → OAuth consent screen + credenciales | Pega el callback URL que te da Supabase. Necesita la URL del Aviso de Privacidad (siguiente fila). |
+| Publicar Aviso de Privacidad + Términos | Ya redactados y publicados como páginas reales: [Aviso de Privacidad](https://claude.ai/code/artifact/484adb15-ec41-4b6a-aa9f-a11c1d67e892) · [Términos y Condiciones](https://claude.ai/code/artifact/8a7e634d-620f-429a-aba7-e8a61c1babe4) (fuente: `legal/`) | Están privados hasta que le des Share a cada uno — un clic — y luego pegas esa URL en App Store Connect / Google OAuth. Todavía necesitan una revisión legal antes de ser definitivos. |
+| Bucket de Storage para Stories | Supabase → Storage → New bucket, nombre exacto `stories`, público en lectura | Sin este bucket, publicar una historia falla al subir la imagen — el resto de la app no lo necesita. |
+| Volverte moderador | Supabase → SQL Editor: `INSERT INTO admin_users (user_id) VALUES ('tu-uuid-de-auth.users');` | Deliberadamente no hay forma de auto-otorgarte este acceso desde la app — es el arranque estándar de "quién es el primer admin". Una vez ahí, `Perfil → Moderación` te deja revisar y resolver reportes reales. |
+| Cuenta RevenueCat + productos | app.revenuecat.com + App Store Connect / Play Console | Gatea la creación de eventos (paywall Premium, $99 MXN/mes). Sin `EXPO_PUBLIC_REVENUECAT_API_KEY` configurada, el paywall se muestra igual pero las compras quedan inertes (no truena la app). Configura un entitlement llamado exactamente `premium`. |
 | Habilitar Apple OAuth | Apple Developer Program ($99 USD/año) | Requerido para "Sign in with Apple" real y, más adelante, Apple Music (MusicKit). Sin esto, el botón de Apple no funcionará — es la única pieza que depende de un pago tuyo. |
 | Certificación SOC2 | Auditor externo (Vanta, Drata, Secureframe, o una firma directa) | Este repo ya implementa los controles técnicos que un auditor revisa (RLS en cada tabla, secretos aislados de tablas de lectura pública, políticas de mínimo privilegio). La certificación en sí es un proceso pagado de semanas/meses que solo tu empresa puede contratar — no es algo que se resuelva con código. |
 | Desplegar el backend Python (`backend/`) | Railway / Fly.io (`Dockerfile` ya incluido) | Opcional. El matching y las recomendaciones ya funcionan 100% del lado del cliente (`lib/ai/matchEngine.ts` + `lib/ai/recommendations.ts`), así que este backend no es necesario para el demo. Solo despliégalo si más adelante quieres scoring SVM del lado del servidor o los cron jobs de APScheduler. |
 | App stores (post-demo) | Apple Developer Program + Google Play Console | Necesario cuando quieran publicar de verdad, no para el demo con amigos. |
 
-### Roadmap post-demo (lo que quedó fuera de este sprint por decisión explícita, no por limitación técnica)
+### Lo que quedó fuera — y por qué
 
-- Mapa de conciertos real + historial de asistencia + recomendaciones basadas en ese historial
-- Recomendación diaria curada por la app (artista/canción/álbum) con votación pública
-- Chat real sobre el esquema `conversations`/`messages` ya existente
-- Los otros 4 modos de juego: perfect lineup, leaderboard en tiempo real de "quién adivina primero", adivina el artista, adivina el año
-- Stories musicales estilo Instagram
-- Paywall Premium vía RevenueCat para creación de eventos (el mockup ya define $99 MXN/mes)
-- Apple Music OAuth
-- Publicación en App Store / Play Store
+Todo lo del pitch original está construido salvo lo que depende de una cuenta/pago tuyo (arriba) o de meses de trabajo real (certificación, publicación en stores). Gaps menores conocidos, por si los notas jugando:
+
+- **Discovery Roulette** sigue siendo el shell de UI original — nunca se tocó, no era parte de ningún corte.
+- **Mapa**: sin `expo-location` instalado (evita forzar un rebuild nativo), la ubicación es por búsqueda de ciudad, no GPS del dispositivo.
+- **Chat**: solo texto — `song_share` ya existe en el schema pero no está cableado a la UI. Sin notificaciones push, solo se actualiza en vivo si tienes el hilo abierto.
+- **Historias**: se ven pero no se borran solas a las 24h (el filtro es en la query, no hay job de limpieza) — no afecta la demo, sí el costo de Storage a largo plazo.
+- **Apple Music OAuth**, **certificación SOC2 real**, y **publicación en App Store/Play Store** siguen bloqueadas en cuentas que solo tú puedes crear (ver tabla arriba).
 
 ---
 
@@ -91,7 +98,7 @@ Esto es lo que **tú** tienes que hacer con tus propias cuentas — no es códig
 
 | Capa | Tecnología |
 |------|-----------|
-| Mobile | React Native + Expo SDK 51 |
+| Mobile | React Native + Expo SDK 54 |
 | Routing | Expo Router v3 (file-based) |
 | Backend DB | Supabase (Auth + PostgreSQL + Realtime) |
 | ML Backend | FastAPI + scikit-learn (Python) |
@@ -145,18 +152,23 @@ Igual que Beli/Letterboxd: cada rating nuevo se inserta por comparación binaria
 
 ## 📱 Pantallas
 
-| Tab | Descripción |
+| Tab / Ruta | Descripción |
 |-----|------------|
-| 🏠 Feed | Timeline de ratings de la comunidad + SongOfTheDay |
-| 👥 Discover | Taste Match: personas con tu mismo gusto |
-| 💘 SoundMatch | Dating musical con swipe (centro) |
-| 🗺️ Map | Conciertos reales (Ticketmaster) + eventos de comunidad |
-| 👤 Profile | Dashboard personal + Mis ratings + Top listas |
+| 🏠 Feed | Timeline de ratings de la comunidad + Stories (rail arriba) + Daily Drop (pick del día, votación pública) + SongOfTheDay |
+| 👥 Discover | Taste Match: personas con tu mismo gusto, mensaje directo desde cada perfil |
+| 💘 SoundMatch | Dating musical con swipe, perfil ciego, configurable en `/soundmatch/settings` |
+| 🗺️ Map | Mapa real (conciertos Ticketmaster + eventos de comunidad), "ya fui" / "amigos que van", crear evento (Premium) |
+| 🎮 Juegos | Ver abajo |
+| 👤 Profile | Dashboard personal + Mis ratings (ranking sin empates) + Top listas |
+| 💬 Chat | `/chat` — accesible desde el ícono del Feed, un match de SoundMatch, o un perfil en Discover |
 
-### Menú juegos (desde Profile)
-- **Versus ⚔️**: A vs B musical (shell de UI — post-demo)
-- **Adivina 🎵**: puzzle diario tipo Wordle (género/artista/álbum/canción), pistas progresivas, 6 intentos, racha persistente en Supabase — el único juego 100% real de este sprint
-- **Discovery Roulette 🎰**: Swipe para descubrir música nueva (shell de UI — post-demo)
+### Juegos (tab Juegos)
+- **Hitster 🎧**: sala en vivo con código para compartir — escuchas una canción, la colocas en tu línea de tiempo cronológica, tus amigos pueden robártela con un token si creen que te equivocaste. El reemplazo real de lo que antes era el shell "Versus".
+- **Adivina 🎵**: puzzle diario tipo Wordle (género/artista/álbum/canción), pistas progresivas, 6 intentos, racha persistente en Supabase.
+- **Carrera Mundial 🌍**: la misma canción para todo el mundo cada día — el primero en adivinar es el #1, tabla de posiciones en vivo.
+- **Perfect Lineup 🎪**: arma un cartel (headliner + actos de apoyo) de un pool diario de artistas reales, puntuado por cohesión de género + balance de popularidad.
+- **Adivina el Artista 🎤** / **Adivina el Año 📅**: práctica libre (no diaria), ronda de 8 preguntas por audio, sin persistencia — reutilizan el mismo pool de canciones que Hitster.
+- **Discovery Roulette 🎰**: shell de UI original, sin tocar — swipe para descubrir música nueva.
 
 ---
 
@@ -166,22 +178,26 @@ Igual que Beli/Letterboxd: cada rating nuevo se inserta por comparación binaria
 sonet/
 ├── app/                    Expo Router screens
 │   ├── (auth)/            login, register, onboarding
-│   └── (tabs)/            feed, discover, date (+ soundmatch settings), map, profile, games
+│   ├── (tabs)/            feed, discover, date, map, games, profile, soundmatch/settings
+│   ├── hitster/           lobby + live room (outside the tab bar — full-screen)
+│   ├── chat/              conversation list + thread
+│   └── stories/           full-screen story viewer
 ├── components/
 │   ├── dashboard/         MusicDashboard (charts)
 │   ├── rating/            CompareDuel (no-ties duel UI)
 │   ├── soundmatch/        SoundMatchCard (Tinder-style, blind profile)
 │   ├── recommendations/   SongOfTheDay
-│   └── games/             VersusGame, GuessSongGame (daily, persistent), DiscoveryRoulette
+│   ├── stories/           StoryRail, CreateStoryModal
+│   ├── premium/           PaywallModal (RevenueCat)
+│   └── games/             GuessSongGame, PerfectLineupGame, WorldwideRaceGame, ListenQuizGame, DiscoveryRoulette
 ├── lib/
 │   ├── ai/               tasteVector.ts, matchEngine.ts, recommendations.ts
 │   ├── ranking.ts        Pairwise-comparison forced ranking (no ties)
-│   ├── supabase.ts
-│   ├── spotify.ts
-│   ├── ticketmaster.ts
-│   ├── youtube.ts
+│   ├── dailyGame.ts, hitsterDeck.ts, racePool.ts, lineupPool.ts, lineupScore.ts, dailyDrop.ts, stories.ts
+│   ├── purchases.ts      RevenueCat wrapper
+│   ├── supabase.ts, spotify.ts, ticketmaster.ts, youtube.ts
 │   └── musicDB.ts        Unified search API
-├── stores/               Zustand: auth, rating (Supabase-backed), social, ai, recommendations
+├── stores/               Zustand: auth, rating, social, ai, recommendations, hitster, games, lineup, race, chat, story
 ├── backend/              Python FastAPI ML service (optional, not deployed by default — see Manual)
 │   ├── main.py           FastAPI + APScheduler cron
 │   ├── music_dna.py      256-dim feature vector
@@ -205,11 +221,10 @@ sonet/
 
 ## 📅 Roadmap Post-Demo
 
-- [ ] Audio preview 30s en juegos (Spotify Web Playback SDK)
-- [ ] Listening Parties en tiempo real
-- [ ] Notificaciones push (Expo Notifications)
+- [ ] Listening Parties en tiempo real (más allá de crearlas — sync de audio compartido)
+- [ ] Notificaciones push (Expo Notifications) — hoy Chat y Hitster solo actualizan en vivo con la app abierta
 - [ ] Bandsintown/Songkick como fuente adicional de conciertos
-- [ ] Apple Music OAuth
-- [ ] Stories musicales (30s audio + imagen)
-- [ ] Leaderboard global de juegos
+- [ ] Apple Music OAuth (bloqueado en cuenta de pago, ver Manual)
+- [ ] Limpieza automática de Stories vencidas (hoy solo se filtran, no se borran)
+- [ ] Song-share dentro del Chat (`message_type: 'song_share'` ya existe en el schema, falta la UI)
 - [ ] Widget de canción favorita para iOS/Android

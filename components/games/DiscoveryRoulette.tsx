@@ -9,14 +9,14 @@ const { width } = Dimensions.get('window');
 const SWIPE_THRESHOLD = width * 0.35;
 
 const DISCOVERY_SONGS = [
-  { id: '1', name: 'Levitating', artist: 'Dua Lipa', genre: 'Pop', emoji: '💫', year: '2020' },
-  { id: '2', name: 'MONTERO', artist: 'Lil Nas X', genre: 'Hip-Hop', emoji: '🐍', year: '2021' },
-  { id: '3', name: 'Easy On Me', artist: 'Adele', genre: 'Soul', emoji: '🎹', year: '2021' },
-  { id: '4', name: 'Flowers', artist: 'Miley Cyrus', genre: 'Pop', emoji: '🌸', year: '2023' },
-  { id: '5', name: 'As It Was', artist: 'Harry Styles', genre: 'Pop Rock', emoji: '🌊', year: '2022' },
-  { id: '6', name: 'Unholy', artist: 'Sam Smith', genre: 'Pop', emoji: '⛪', year: '2022' },
-  { id: '7', name: 'Anti-Hero', artist: 'Taylor Swift', genre: 'Pop', emoji: '🦸', year: '2022' },
-  { id: '8', name: 'Creepin\'', artist: 'Metro Boomin', genre: 'Hip-Hop', emoji: '👻', year: '2022' },
+  { id: '1', name: 'Levitating', artist: 'Dua Lipa', genre: 'Pop', year: '2020' },
+  { id: '2', name: 'MONTERO', artist: 'Lil Nas X', genre: 'Hip-Hop', year: '2021' },
+  { id: '3', name: 'Easy On Me', artist: 'Adele', genre: 'Soul', year: '2021' },
+  { id: '4', name: 'Flowers', artist: 'Miley Cyrus', genre: 'Pop', year: '2023' },
+  { id: '5', name: 'As It Was', artist: 'Harry Styles', genre: 'Pop Rock', year: '2022' },
+  { id: '6', name: 'Unholy', artist: 'Sam Smith', genre: 'Pop', year: '2022' },
+  { id: '7', name: 'Anti-Hero', artist: 'Taylor Swift', genre: 'Pop', year: '2022' },
+  { id: '8', name: "Creepin'", artist: 'Metro Boomin', genre: 'Hip-Hop', year: '2022' },
 ];
 
 interface Props {
@@ -26,7 +26,16 @@ interface Props {
 export function DiscoveryRoulette({ onExit }: Props) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [liked, setLiked] = useState<string[]>([]);
-  const [finished, setFinished] = useState(false);
+  // Derived, not a separately-tracked boolean: the old imperative
+  // `setFinished(true)` inside the animation callback read a stale
+  // `currentIndex` closure, so two rapid swipes (no guard against
+  // double-firing mid-animation) could push the index past the array's end
+  // without ever flipping `finished` — the next render then tried
+  // `DISCOVERY_SONGS[currentIndex].emoji` on `undefined` and crashed.
+  // Deriving it straight from `currentIndex` every render makes that
+  // impossible regardless of how many swipes stack up.
+  const finished = currentIndex >= DISCOVERY_SONGS.length;
+  const isAnimating = useRef(false);
   const translateX = useRef(new Animated.Value(0)).current;
   const rotate = translateX.interpolate({ inputRange: [-width, 0, width], outputRange: ['-15deg', '0deg', '15deg'] });
 
@@ -47,6 +56,9 @@ export function DiscoveryRoulette({ onExit }: Props) {
   ).current;
 
   const swipe = (direction: 'left' | 'right') => {
+    if (isAnimating.current || finished) return; // ignore taps while a swipe is already in flight
+    isAnimating.current = true;
+
     const song = DISCOVERY_SONGS[currentIndex];
     if (direction === 'right') setLiked((prev) => [...prev, song.id]);
 
@@ -56,11 +68,8 @@ export function DiscoveryRoulette({ onExit }: Props) {
       useNativeDriver: true,
     }).start(() => {
       translateX.setValue(0);
-      if (currentIndex >= DISCOVERY_SONGS.length - 1) {
-        setFinished(true);
-      } else {
-        setCurrentIndex((i) => i + 1);
-      }
+      isAnimating.current = false;
+      setCurrentIndex((i) => i + 1);
     });
   };
 
@@ -69,13 +78,13 @@ export function DiscoveryRoulette({ onExit }: Props) {
       <SafeAreaView style={styles.container} edges={['top']}>
         <LinearGradient colors={['#1A2E0A', Colors.background]} style={StyleSheet.absoluteFill} />
         <View style={styles.centered}>
-          <Text style={styles.finishedEmoji}>🎰</Text>
+          <Ionicons name="shuffle" size={56} color={Colors.secondary} style={{ marginBottom: Spacing.sm }} />
           <Text style={styles.finishedTitle}>¡Ronda completada!</Text>
           <Text style={styles.finishedSub}>Te gustaron {liked.length} canciones</Text>
           <Text style={styles.finishedHint}>Se añadirán a tu playlist de Sonet</Text>
           <TouchableOpacity onPress={onExit} activeOpacity={0.8}>
             <LinearGradient colors={[Colors.secondary, '#65A30D']} style={styles.exitButton}>
-              <Text style={styles.exitButtonText}>Ver playlist 🎵</Text>
+              <Text style={styles.exitButtonText}>Ver playlist</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -93,18 +102,18 @@ export function DiscoveryRoulette({ onExit }: Props) {
         <TouchableOpacity onPress={onExit} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Discovery 🎰</Text>
+        <Text style={styles.headerTitle}>Discovery</Text>
         <Text style={styles.progress}>{currentIndex + 1}/{DISCOVERY_SONGS.length}</Text>
       </View>
 
       <View style={styles.instructions}>
-        <Text style={styles.instructionText}>⬅️ Skip  |  Like ➡️</Text>
+        <Text style={styles.instructionText}>Desliza a la izquierda para saltar, a la derecha si te gusta</Text>
       </View>
 
       <View style={styles.cardContainer}>
         {currentIndex < DISCOVERY_SONGS.length - 1 && (
           <View style={[styles.card, styles.cardBack]}>
-            <Text style={styles.songEmojiBack}>{DISCOVERY_SONGS[currentIndex + 1].emoji}</Text>
+            <Ionicons name="musical-notes" size={40} color={Colors.textMuted} />
           </View>
         )}
 
@@ -116,7 +125,7 @@ export function DiscoveryRoulette({ onExit }: Props) {
             colors={[Colors.surface, Colors.background]}
             style={[StyleSheet.absoluteFill, { borderRadius: Radius.xl }]}
           />
-          <Text style={styles.songEmoji}>{song.emoji}</Text>
+          <Ionicons name="musical-notes" size={64} color={Colors.primaryLight} style={{ marginBottom: Spacing.sm }} />
           <Text style={styles.songName}>{song.name}</Text>
           <Text style={styles.artistName}>{song.artist}</Text>
           <View style={styles.tags}>

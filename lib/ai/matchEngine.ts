@@ -101,35 +101,35 @@ function scoreToLabel(score: number): CompatibilityLabel {
 function extractSharedTraits(a: MusicVector, b: MusicVector): string[] {
   const traits: string[] = [];
   if (Math.abs(a.energy - b.energy) < 0.15) {
-    traits.push(a.energy > 0.7 ? '⚡ Mucha energía' : '😌 Música relajada');
+    traits.push(a.energy > 0.7 ? 'Mucha energía' : 'Música relajada');
   }
   if (Math.abs(a.valence - b.valence) < 0.15) {
-    traits.push(a.valence > 0.6 ? '😄 Música alegre' : '🌧 Vibes melancólicos');
+    traits.push(a.valence > 0.6 ? 'Música alegre' : 'Vibes melancólicos');
   }
   if (Math.abs(a.danceability - b.danceability) < 0.15 && a.danceability > 0.6) {
-    traits.push('💃 Ambos mueven el cuerpo');
+    traits.push('Ambos mueven el cuerpo');
   }
   if (Math.abs(a.tempo_norm - b.tempo_norm) < 0.2) {
     const bpm = Math.round(a.tempo_norm * 140 + 60);
-    traits.push(`🥁 BPM similares (~${bpm})`);
+    traits.push(`BPM similares (~${bpm})`);
   }
-  if (a.genre_latin > 0.2 && b.genre_latin > 0.2) traits.push('🌮 Amor por el género latino');
-  if (a.genre_rock > 0.2 && b.genre_rock > 0.2) traits.push('🎸 Rock en común');
-  if (a.genre_hip_hop > 0.2 && b.genre_hip_hop > 0.2) traits.push('🎤 Hip-hop heads');
-  if (a.genre_electronic > 0.2 && b.genre_electronic > 0.2) traits.push('🎛️ Electronic lovers');
+  if (a.genre_latin > 0.2 && b.genre_latin > 0.2) traits.push('Amor por el género latino');
+  if (a.genre_rock > 0.2 && b.genre_rock > 0.2) traits.push('Rock en común');
+  if (a.genre_hip_hop > 0.2 && b.genre_hip_hop > 0.2) traits.push('Hip-hop heads');
+  if (a.genre_electronic > 0.2 && b.genre_electronic > 0.2) traits.push('Electronic lovers');
   if (Math.abs(a.acousticness - b.acousticness) < 0.15 && a.acousticness > 0.5) {
-    traits.push('🎻 Prefieren lo acústico');
+    traits.push('Prefieren lo acústico');
   }
   return traits.slice(0, 4);
 }
 
 function extractContrastTraits(a: MusicVector, b: MusicVector): string[] {
   const diffs: { label: string; diff: number }[] = [
-    { label: '⚡ Energía', diff: Math.abs(a.energy - b.energy) },
-    { label: '😊 Mood', diff: Math.abs(a.valence - b.valence) },
-    { label: '💃 Bailabilidad', diff: Math.abs(a.danceability - b.danceability) },
-    { label: '🎸 Rock vs Pop', diff: Math.abs(a.genre_rock - b.genre_rock) },
-    { label: '🔊 Volumen', diff: Math.abs(a.loudness_norm - b.loudness_norm) },
+    { label: 'Energía', diff: Math.abs(a.energy - b.energy) },
+    { label: 'Mood', diff: Math.abs(a.valence - b.valence) },
+    { label: 'Bailabilidad', diff: Math.abs(a.danceability - b.danceability) },
+    { label: 'Rock vs Pop', diff: Math.abs(a.genre_rock - b.genre_rock) },
+    { label: 'Volumen', diff: Math.abs(a.loudness_norm - b.loudness_norm) },
   ];
   return diffs
     .filter((d) => d.diff > 0.3)
@@ -144,7 +144,7 @@ function buildDescription(score: number, traits: string[]): string {
   if (score >= 70) return `Buen match. Sus gustos se complementan muy bien — muchas cosas en común.`;
   if (score >= 60) return `Match decente. Descubran música nueva juntos — hay química para explorar.`;
   if (score >= 50) return `Algunos gustos en común. Podrían sorprenderse mutuamente.`;
-  return `Gustos muy diferentes — pero los opuestos a veces se atraen 😏`;
+  return `Gustos muy diferentes — pero los opuestos a veces se atraen.`;
 }
 
 /** Rank a list of candidates against a target user */

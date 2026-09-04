@@ -16,14 +16,16 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/lib/supabase';
 import { Colors, Spacing, Radius } from '@/constants/colors';
+import { DEMO_USER_ID } from '@/lib/demoContent';
 
-type LookingFor = 'dating' | 'friendship' | 'concert_buddy';
+export type LookingFor = 'dating' | 'friendship' | 'music_buddy' | 'concert_buddy';
 type GenderPref = 'men' | 'women' | 'both';
 
-const LOOKING_FOR_OPTIONS: { value: LookingFor; label: string; emoji: string }[] = [
-  { value: 'dating', label: 'Citas', emoji: '💘' },
-  { value: 'friendship', label: 'Amistad', emoji: '🤝' },
-  { value: 'concert_buddy', label: 'Ir a conciertos', emoji: '🎤' },
+export const LOOKING_FOR_OPTIONS: { value: LookingFor; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { value: 'friendship', label: 'Amigos', icon: 'people-outline' },
+  { value: 'dating', label: 'Pareja', icon: 'heart-outline' },
+  { value: 'music_buddy', label: 'Escuchar música', icon: 'headset-outline' },
+  { value: 'concert_buddy', label: 'Ir a conciertos', icon: 'musical-notes-outline' },
 ];
 
 const GENDER_OPTIONS: { value: string; label: string }[] = [
@@ -83,6 +85,14 @@ export default function SoundMatchSettingsScreen() {
 
   const load = useCallback(async () => {
     if (!user?.id) return;
+    // Demo account: no backend to read from — start from an already-active
+    // profile with a sensible default intent, so the flow never stalls on
+    // an empty picker mid-demo.
+    if (user.id === DEMO_USER_ID) {
+      setSettings((s) => ({ ...s, active: true, age: 27, looking_for: s.looking_for.length ? s.looking_for : ['music_buddy', 'concert_buddy'] }));
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const { data } = await supabase.from('soundmatch_profiles').select('*').eq('user_id', user.id).maybeSingle();
     if (data) {
@@ -115,6 +125,10 @@ export default function SoundMatchSettingsScreen() {
 
   const handleSave = async () => {
     if (!user?.id) return;
+    if (user.id === DEMO_USER_ID) {
+      router.back();
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.from('soundmatch_profiles').upsert({
       user_id: user.id,
@@ -184,12 +198,21 @@ export default function SoundMatchSettingsScreen() {
             <Text style={styles.sectionLabel}>Busco</Text>
             <View style={styles.chipsRow}>
               {LOOKING_FOR_OPTIONS.map((opt) => (
-                <Chip
+                <TouchableOpacity
                   key={opt.value}
-                  label={`${opt.emoji} ${opt.label}`}
-                  active={settings.looking_for.includes(opt.value)}
+                  style={[styles.chip, settings.looking_for.includes(opt.value) && styles.chipActive]}
                   onPress={() => toggleLookingFor(opt.value)}
-                />
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name={opt.icon}
+                    size={14}
+                    color={settings.looking_for.includes(opt.value) ? Colors.primaryLight : Colors.textSecondary}
+                  />
+                  <Text style={[styles.chipText, settings.looking_for.includes(opt.value) && styles.chipTextActive]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
               ))}
             </View>
 
@@ -338,6 +361,9 @@ const styles = StyleSheet.create({
   },
   chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: Radius.full,

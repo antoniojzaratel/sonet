@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import { computeMatch } from '@/lib/ai/matchEngine';
+import { sendPushTo } from '@/lib/push';
+import { track } from '@/lib/analytics';
 import type { MusicVector } from '@/lib/ai/tasteVector';
+import { fetchBlockedIds } from '@/lib/blocking';
+import { useAuthStore } from '@/stores/authStore';
+import { DEMO_SOUNDMATCH_CANDIDATES } from '@/lib/demoContent';
 
 const ML_BASE = process.env.EXPO_PUBLIC_ML_API_URL ?? 'http://localhost:8000';
 
@@ -142,6 +147,7 @@ async function fetchBlindCandidates(userId: string): Promise<SoundMatchCandidate
 
   const { data: swiped } = await supabase.from('soundmatch_swipes').select('target_id').eq('swiper_id', userId);
   const swipedIds = new Set((swiped ?? []).map((s: any) => s.target_id as string));
+  const blockedIds = await fetchBlockedIds(userId);
 
   const { data: pool } = await supabase
     .from('soundmatch_profiles')
@@ -152,6 +158,7 @@ async function fetchBlindCandidates(userId: string): Promise<SoundMatchCandidate
 
   const candidates = (pool ?? []).filter((c: SoundmatchProfileRow) => {
     if (swipedIds.has(c.user_id)) return false;
+    if (blockedIds.has(c.user_id)) return false;
     if (!genderMatchesPreference(c.gender, viewer.gender_preference)) return false;
     if (!genderMatchesPreference(viewer.gender, c.gender_preference)) return false;
     if (!ageOverlaps(viewer as SoundmatchProfileRow, c)) return false;
@@ -235,6 +242,10 @@ export const useRecommendationStore = create<RecommendationState>((set, get) => 
   },
 
   fetchSoundMatchCandidates: async (userId) => {
+    if (useAuthStore.getState().isRichDemo) {
+      set({ soundMatchCandidates: DEMO_SOUNDMATCH_CANDIDATES, loadingCandidates: false });
+      return;
+    }
     set({ loadingCandidates: true });
     try {
       const res = await fetch(`${ML_BASE}/soundmatch/candidates/${userId}?limit=30`);
@@ -250,6 +261,28 @@ export const useRecommendationStore = create<RecommendationState>((set, get) => 
   },
 
   swipeSoundMatch: async (swiperId, targetId, action) => {
+    if (useAuthStore.getState().isRichDemo) {
+      const candidate = get().soundMatchCandidates.find((c) => c.user.id === targetId);
+      set((state) => ({ soundMatchCandidates: state.soundMatchCandidates.filter((c) => c.user.id !== targetId) }));
+      // The top candidate always matches back — a satisfying demo moment
+      // without needing a second real account to swipe from.
+      if ((action === 'like' || action === 'super_like') && targetId === 'demo-cand-1') {
+        set((state) => ({
+          soundMatchMatches: [
+            {
+              id: `demo-match-${targetId}`,
+              other_user: { display_name: 'Match musical', username: 'match' },
+              icebreaker: `¡Match! Tienen ${Math.round(candidate?.taste_score ?? 90)}% de compatibilidad musical`,
+              taste_score: candidate?.taste_score ?? 90,
+              conversation_id: null,
+            },
+            ...state.soundMatchMatches,
+          ],
+        }));
+      }
+      return;
+    }
+
     await supabase.from('soundmatch_swipes').upsert({
       swiper_id: swiperId,
       target_id: targetId,
@@ -260,9 +293,50 @@ export const useRecommendationStore = create<RecommendationState>((set, get) => 
     set((state) => ({
       soundMatchCandidates: state.soundMatchCandidates.filter((c) => c.user.id !== targetId),
     }));
+
+    // A 'like'/'super_like' may have just completed a mutual match (the SQL
+    // trigger check_soundmatch_mutual creates the row synchronously on
+    // insert) — if so, push the other person. Blind profile: never put a
+    // name in the notification, matches the in-app notification copy the
+    // trigger itself writes.
+    if (action === 'like' || action === 'super_like') {
+      const a = swiperId < targetId ? swiperId : targetId;
+      const b = swiperId < targetId ? targetId : swiperId;
+      const { data: match } = await supabase
+        .from('soundmatch_matches')
+        .select('id')
+        .eq('user_a', a)
+        .eq('user_b', b)
+        .maybeSingle();
+      if (match) {
+        sendPushTo(targetId, 'Nuevo match musical', '¡Nuevo SoundMatch! Empiecen a hablar');
+        track('soundmatch_match');
+      }
+    }
   },
 
   fetchSoundMatchMatches: async (userId) => {
+    if (useAuthStore.getState().isRichDemo) {
+      // A match from "before today" so the tab is never empty even before
+      // swiping — separate from the live candidates so swiping cand-1
+      // produces its own fresh match without colliding with this one.
+      set((state) => ({
+        soundMatchMatches: state.soundMatchMatches.some((m) => m.id === 'demo-match-existing')
+          ? state.soundMatchMatches
+          : [
+              {
+                id: 'demo-match-existing',
+                other_user: { display_name: 'Match musical', username: 'match' },
+                icebreaker: '¡Match! Tienen 84% de compatibilidad musical',
+                taste_score: 84,
+                conversation_id: null,
+              },
+              ...state.soundMatchMatches,
+            ],
+      }));
+      return;
+    }
+
     const { data } = await supabase
       .from('soundmatch_matches')
       .select(`

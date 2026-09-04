@@ -6,7 +6,7 @@ import { scoreToColor, formatRelativeTime, getInitials } from '@/lib/utils';
 import type { Rating, User } from '@/types';
 
 const TYPE_EMOJI: Record<string, string> = {
-  song: '🎵', album: '💿', podcast: '🎙️', single: '🎶', concert: '🎤', music_video: '🎬',
+  song: '', album: '', podcast: '️', single: '', concert: '', music_video: '',
 };
 
 interface Props {

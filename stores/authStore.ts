@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '@/lib/supabase';
+import { DEMO_USER } from '@/lib/demoContent';
 import type { User } from '@/types';
 
 interface SpotifyProfile {
@@ -19,7 +20,13 @@ interface AuthState {
   spotifyToken: string | null;
   spotifyRefreshToken: string | null;
   spotifyProfile: SpotifyProfile | null;
+  /** True after signing in with the demo@demo.com account — every store
+   * that reads it serves rich local content (lib/demoContent.ts) instead
+   * of querying Supabase, so the app demos fully populated with zero
+   * backend required. */
+  isRichDemo: boolean;
 
+  loginAsDemo: () => void;
   setSession: (session: any) => void;
   setUser: (user: User | null) => void;
   setSpotifyToken: (token: string | null) => void;
@@ -88,6 +95,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   spotifyToken: null,
   spotifyRefreshToken: null,
   spotifyProfile: null,
+  isRichDemo: false,
+
+  loginAsDemo: () => set({ user: DEMO_USER, isRichDemo: true, loading: false }),
 
   setSession: (session) => set({ session, loading: false }),
 
@@ -151,8 +161,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signInWithApple: () => signInWithOAuthProvider('apple'),
 
   signOut: async () => {
-    await supabase.auth.signOut();
+    if (!get().isRichDemo) await supabase.auth.signOut();
     await AsyncStorage.removeItem('spotify_access_token');
-    set({ user: null, session: null, spotifyToken: null, spotifyRefreshToken: null, spotifyProfile: null });
+    set({ user: null, session: null, spotifyToken: null, spotifyRefreshToken: null, spotifyProfile: null, isRichDemo: false });
   },
 }));

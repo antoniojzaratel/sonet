@@ -56,7 +56,7 @@ export interface Rating {
   user?: Partial<User>;
 }
 
-export type EventType = 'concert' | 'listening_party' | 'festival' | 'meetup';
+export type EventType = 'concert' | 'listening_party' | 'watch_party' | 'festival' | 'meetup';
 
 export interface Event {
   id: string;

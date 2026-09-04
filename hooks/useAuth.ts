@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { useRouter, useSegments } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
+import { registerForPushNotifications } from '@/lib/push';
+import { initAnalytics, identify } from '@/lib/analytics';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 
@@ -36,15 +38,24 @@ export function useSupabaseAuth() {
 
   useEffect(() => {
     if (isDemoMode) return;
+    initAnalytics();
 
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
-      if (session?.user?.id) fetchProfile(session.user.id);
+      if (session?.user?.id) {
+        fetchProfile(session.user.id);
+        registerForPushNotifications(session.user.id);
+        identify(session.user.id);
+      }
     });
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session?.user?.id) fetchProfile(session.user.id);
+      if (session?.user?.id) {
+        fetchProfile(session.user.id);
+        registerForPushNotifications(session.user.id);
+        identify(session.user.id);
+      }
     });
 
     return () => listener.subscription.unsubscribe();

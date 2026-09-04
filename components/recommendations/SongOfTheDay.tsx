@@ -27,9 +27,9 @@ interface SongData {
 }
 
 const REACTIONS = [
-  { emoji: '🔥', label: '¡Fuego!' },
-  { emoji: '😊', label: 'Me gusta' },
-  { emoji: '😞', label: 'No es lo mío' },
+  { emoji: '', label: '¡Fuego!' },
+  { emoji: '', label: 'Me gusta' },
+  { emoji: '', label: 'No es lo mío' },
 ];
 
 export function SongOfTheDay() {
@@ -117,7 +117,7 @@ export function SongOfTheDay() {
     <View style={styles.card}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>🎵 Canción del día</Text>
+        <Text style={styles.title}> Canción del día</Text>
         <Text style={styles.subtitle}>Para ti</Text>
       </View>
 
@@ -129,7 +129,7 @@ export function SongOfTheDay() {
               <Image source={{ uri: song.imageUrl }} style={styles.artwork} />
             ) : (
               <View style={[styles.artwork, styles.artworkFallback]}>
-                <Text style={{ fontSize: 40 }}>🎵</Text>
+                <Text style={{ fontSize: 40 }}></Text>
               </View>
             )}
             <View style={styles.songInfo}>

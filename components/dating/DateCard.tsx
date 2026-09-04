@@ -89,11 +89,11 @@ export function DateCard({ displayName, username, avatarUrl, bio, match, isTop, 
     >
       {/* Like indicator */}
       <Animated.View style={[styles.indicator, styles.likeIndicator, { opacity: likeOpacity }]}>
-        <Text style={styles.indicatorText}>LIKE 💚</Text>
+        <Text style={styles.indicatorText}>LIKE </Text>
       </Animated.View>
       {/* Skip indicator */}
       <Animated.View style={[styles.indicator, styles.skipIndicator, { opacity: skipOpacity }]}>
-        <Text style={styles.indicatorText}>SKIP ❌</Text>
+        <Text style={styles.indicatorText}>SKIP </Text>
       </Animated.View>
 
       {/* Avatar */}

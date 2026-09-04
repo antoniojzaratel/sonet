@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { isDemoMode } from '@/hooks/useAuth';
 import { useAuthStore } from '@/stores/authStore';
+import { isDemoAccount } from '@/lib/demoContent';
 
 const C = {
   background: '#0D0D0D',
@@ -35,9 +36,17 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<'google' | 'apple' | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const { signInWithGoogle, signInWithApple } = useAuthStore();
+  const { signInWithGoogle, signInWithApple, loginAsDemo } = useAuthStore();
 
   const handleLogin = async () => {
+    // demo@demo.com / demo123 loads a fully populated local demo account —
+    // works regardless of whether Supabase is configured, since it never
+    // touches the network at all.
+    if (isDemoAccount(email, password)) {
+      loginAsDemo();
+      router.replace('/(tabs)');
+      return;
+    }
     if (isDemoMode) {
       router.replace('/(tabs)');
       return;
@@ -107,6 +116,8 @@ export default function LoginScreen() {
               keyboardType="email-address"
               autoCapitalize="none"
               autoCorrect={false}
+              accessibilityLabel="Correo electrónico"
+              textContentType="emailAddress"
             />
           </View>
 
@@ -120,10 +131,14 @@ export default function LoginScreen() {
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
               autoCapitalize="none"
+              accessibilityLabel="Contraseña"
+              textContentType="password"
             />
             <TouchableOpacity
               onPress={() => setShowPassword((v) => !v)}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
             >
               <Ionicons
                 name={showPassword ? 'eye-off-outline' : 'eye-outline'}
@@ -138,6 +153,9 @@ export default function LoginScreen() {
             onPress={handleLogin}
             disabled={loading}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Entrar"
+            accessibilityState={{ disabled: loading, busy: loading }}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
@@ -150,6 +168,8 @@ export default function LoginScreen() {
             onPress={() => router.push('/(auth)/register')}
             activeOpacity={0.7}
             style={styles.registerRow}
+            accessibilityRole="link"
+            accessibilityLabel="Crear cuenta"
           >
             <Text style={styles.registerText}>
               No tienes cuenta?{' '}
@@ -171,6 +191,9 @@ export default function LoginScreen() {
             onPress={() => handleOAuthLogin('google')}
             disabled={oauthLoading !== null}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Continuar con Google"
+            accessibilityState={{ disabled: oauthLoading !== null, busy: oauthLoading === 'google' }}
           >
             {oauthLoading === 'google' ? (
               <ActivityIndicator color={C.text} />
@@ -188,6 +211,9 @@ export default function LoginScreen() {
               onPress={() => handleOAuthLogin('apple')}
               disabled={oauthLoading !== null}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Continuar con Apple"
+              accessibilityState={{ disabled: oauthLoading !== null, busy: oauthLoading === 'apple' }}
             >
               {oauthLoading === 'apple' ? (
                 <ActivityIndicator color="#000" />
@@ -204,6 +230,8 @@ export default function LoginScreen() {
             style={styles.spotifyButton}
             onPress={handleSpotifyLogin}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Continuar con Spotify"
           >
             <Ionicons name="musical-notes-outline" size={20} color="#fff" />
             <Text style={styles.spotifyButtonText}>Continuar con Spotify</Text>

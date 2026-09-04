@@ -16,10 +16,20 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useRatingStore, type FeedEntry } from '@/stores/ratingStore';
 import { useAuthStore } from '@/stores/authStore';
 import { searchMusic, type MusicItem } from '@/lib/musicDB';
+import { dropForDate, resolveDailyDrop, todayDateString, type ResolvedDrop } from '@/lib/dailyDrop';
+import { supabase } from '@/lib/supabase';
+import { searchDemoCatalog } from '@/lib/demoContent';
+import { useStoryStore } from '@/stores/storyStore';
+import { StoryRail } from '@/components/stories/StoryRail';
+import { CreateStoryModal } from '@/components/stories/CreateStoryModal';
 import { CompareDuel, type DuelItem } from '@/components/rating/CompareDuel';
+import { CoverImage } from '@/components/CoverImage';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { BUCKET_LABELS, type Bucket, type Comparator } from '@/lib/ranking';
 import { scoreToColor, formatScore, formatRelativeTime } from '@/lib/utils';
 import type { RatingEntry } from '@/stores/ratingStore';
@@ -63,9 +73,7 @@ function FeedCard({ entry, liked, onToggleLike }: FeedCardProps) {
       </View>
 
       <View style={[styles.cardRow, styles.contentRow]}>
-        <View style={[styles.cover, { backgroundColor: Colors_fallback(rating.contentId) }]}>
-          <Text style={styles.coverInitial}>{rating.contentName.charAt(0).toUpperCase()}</Text>
-        </View>
+        <CoverImage uri={rating.imageUrl} seed={rating.contentName} size={48} radius={8} style={styles.cover} />
         <View style={styles.contentCol}>
           <Text style={styles.contentName} numberOfLines={1}>{rating.contentName}</Text>
           <Text style={styles.artistName}>{rating.artistName}</Text>
@@ -79,21 +87,20 @@ function FeedCard({ entry, liked, onToggleLike }: FeedCardProps) {
       {!!rating.review && <Text style={styles.review}>{rating.review}</Text>}
 
       <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.likeBtn} onPress={() => onToggleLike(rating.id)} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.likeBtn}
+          onPress={() => onToggleLike(rating.id)}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={liked ? 'Quitar me gusta' : 'Me gusta'}
+          accessibilityState={{ selected: liked }}
+        >
           <Ionicons name={liked ? 'heart' : 'heart-outline'} size={18} color={liked ? '#F43F5E' : '#666666'} />
           <Text style={[styles.likeCount, liked && styles.likeCountActive]}>Me gusta</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
-}
-
-// Deterministic fallback color per content id, so covers without art still look distinct.
-function Colors_fallback(seed: string): string {
-  const palette = ['#A855F7', '#F43F5E', '#84CC16', '#F59E0B', '#06B6D4', '#8B5CF6', '#EC4899', '#10B981'];
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  return palette[hash % palette.length];
 }
 
 // ─── RateModal ────────────────────────────────────────────────────────────────
@@ -105,44 +112,68 @@ type ModalStep = 'search' | 'bucket' | 'saving';
 interface RateModalProps {
   visible: boolean;
   onClose: () => void;
+  /** Skips search and jumps straight to the bucket step — used by the Daily Drop card. */
+  initialItem?: MusicItem | null;
+  onRated?: () => void;
 }
 
-function RateModal({ visible, onClose }: RateModalProps) {
+function RateModal({ visible, onClose, initialItem, onRated }: RateModalProps) {
   const { addRating } = useRatingStore();
-  const { user, spotifyToken } = useAuthStore();
+  const { user, spotifyToken, isRichDemo } = useAuthStore();
 
-  const [step, setStep] = useState<ModalStep>('search');
+  const [step, setStep] = useState<ModalStep>(initialItem ? 'bucket' : 'search');
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<MusicItem[]>([]);
   const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<MusicItem | null>(null);
+  const [selected, setSelected] = useState<MusicItem | null>(initialItem ?? null);
   const [review, setReview] = useState('');
   const [duelPair, setDuelPair] = useState<{ a: DuelItem; b: DuelItem } | null>(null);
   const duelResolveRef = useRef<((winner: 'a' | 'b') => void) | null>(null);
 
-  const runSearch = useCallback(
-    async (q: string) => {
-      setQuery(q);
-      if (!q.trim()) {
-        setResults([]);
-        return;
-      }
-      setSearching(true);
-      try {
-        const items = await searchMusic({
-          query: q,
-          types: ['song', 'album'] as ContentType[],
-          accessToken: spotifyToken ?? undefined,
-          limit: 10,
-        });
-        setResults(items);
-      } catch {
-        setResults([]);
-      }
-      setSearching(false);
-    },
-    [spotifyToken]
-  );
+  useEffect(() => {
+    if (visible && initialItem) {
+      setSelected(initialItem);
+      setStep('bucket');
+    }
+  }, [visible, initialItem]);
+
+  // Typing updates `query` (and the input) immediately; the actual Spotify
+  // call only fires ~350ms after typing pauses, so a 10-character query
+  // doesn't mean 10 live API calls.
+  const debouncedQuery = useDebouncedValue(query, 350);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!debouncedQuery.trim()) {
+      setResults([]);
+      return;
+    }
+    // Demo account: search a local catalog instead of Spotify, so there's
+    // always something real-looking to rate even with no token connected.
+    if (isRichDemo) {
+      setResults(searchDemoCatalog(debouncedQuery));
+      return;
+    }
+    setSearching(true);
+    searchMusic({
+      query: debouncedQuery,
+      types: ['song', 'album'] as ContentType[],
+      accessToken: spotifyToken ?? undefined,
+      limit: 10,
+    })
+      .then((items) => {
+        if (!cancelled) setResults(items);
+      })
+      .catch(() => {
+        if (!cancelled) setResults([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSearching(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedQuery, spotifyToken, isRichDemo]);
 
   const handleSelectItem = (item: MusicItem) => {
     setSelected(item);
@@ -193,6 +224,7 @@ function RateModal({ visible, onClose }: RateModalProps) {
 
     if (saved) {
       Alert.alert('¡Calificado!', `"${selected.name}" quedó en ${saved.score.toFixed(1)}`);
+      onRated?.();
       handleClose();
     } else {
       Alert.alert('Error', 'No se pudo guardar la calificación');
@@ -240,18 +272,24 @@ function RateModal({ visible, onClose }: RateModalProps) {
                     placeholder="Busca canciones o álbumes..."
                     placeholderTextColor="#666666"
                     value={query}
-                    onChangeText={runSearch}
+                    onChangeText={setQuery}
                     autoFocus
+                    accessibilityLabel="Buscar canciones o álbumes"
                   />
                   {searching && <ActivityIndicator size="small" color="#A855F7" />}
                 </View>
 
                 <Text style={styles.sectionLabel}>Resultados</Text>
                 {results.map((item) => (
-                  <TouchableOpacity key={item.id} style={styles.catalogRow} onPress={() => handleSelectItem(item)} activeOpacity={0.7}>
-                    <View style={[styles.catalogCover, { backgroundColor: Colors_fallback(item.id) }]}>
-                      <Text style={styles.catalogInitial}>{item.name.charAt(0).toUpperCase()}</Text>
-                    </View>
+                  <TouchableOpacity
+                    key={item.id}
+                    style={styles.catalogRow}
+                    onPress={() => handleSelectItem(item)}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.name}, ${item.artist_name}`}
+                  >
+                    <CoverImage uri={item.cover_image} seed={item.name} size={44} radius={8} style={styles.catalogCover} />
                     <View style={styles.catalogInfo}>
                       <Text style={styles.catalogName} numberOfLines={1}>{item.name}</Text>
                       <Text style={styles.catalogArtist} numberOfLines={1}>
@@ -274,9 +312,7 @@ function RateModal({ visible, onClose }: RateModalProps) {
             {step === 'bucket' && selected && (
               <>
                 <View style={styles.selectedHeader}>
-                  <View style={[styles.selectedCover, { backgroundColor: Colors_fallback(selected.id) }]}>
-                    <Text style={styles.selectedInitial}>{selected.name.charAt(0).toUpperCase()}</Text>
-                  </View>
+                  <CoverImage uri={selected.cover_image} seed={selected.name} size={52} radius={10} style={styles.selectedCover} />
                   <View style={styles.selectedInfo}>
                     <Text style={styles.selectedName} numberOfLines={1}>{selected.name}</Text>
                     <Text style={styles.selectedArtist}>{selected.artist_name}</Text>
@@ -296,7 +332,14 @@ function RateModal({ visible, onClose }: RateModalProps) {
                 <Text style={styles.sectionLabel}>¿Qué te pareció?</Text>
                 <View style={styles.bucketGrid}>
                   {BUCKETS.map((b) => (
-                    <TouchableOpacity key={b} style={styles.bucketBtn} onPress={() => handlePickBucket(b)} activeOpacity={0.8}>
+                    <TouchableOpacity
+                      key={b}
+                      style={styles.bucketBtn}
+                      onPress={() => handlePickBucket(b)}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={BUCKET_LABELS[b]}
+                    >
                       <Text style={styles.bucketBtnText}>{BUCKET_LABELS[b]}</Text>
                     </TouchableOpacity>
                   ))}
@@ -329,17 +372,211 @@ function RateModal({ visible, onClose }: RateModalProps) {
   );
 }
 
+// ─── Daily Drop ───────────────────────────────────────────────────────────────
+// App-wide pick, same for every user today — distinct from each user's
+// personalized "Song of the Day". Vote, play, and (for song/album picks)
+// rate it through the real bucket+duel flow above.
+
+type DropVote = 'like' | 'dislike' | 'never_heard';
+
+interface DropRow extends ResolvedDrop {
+  date: string;
+}
+
+function DailyDropCard({ onOpenRate }: { onOpenRate: (item: MusicItem) => void }) {
+  const { user, spotifyToken } = useAuthStore();
+  const [drop, setDrop] = useState<DropRow | null>(null);
+  const [myVote, setMyVote] = useState<DropVote | null>(null);
+  const [tally, setTally] = useState<Record<DropVote, number>>({ like: 0, dislike: 0, never_heard: 0 });
+  const [rated, setRated] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const player = useAudioPlayer(drop?.preview_url ?? null);
+  const status = useAudioPlayerStatus(player);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const date = todayDateString();
+      let { data: row } = await supabase.from('daily_drop').select('*').eq('date', date).maybeSingle();
+
+      if (!row) {
+        const resolved = await resolveDailyDrop(dropForDate(date), spotifyToken);
+        await supabase.from('daily_drop').upsert(
+          {
+            date,
+            content_type: resolved.content_type,
+            content_id: resolved.content_id,
+            content_name: resolved.content_name,
+            artist_name: resolved.artist_name,
+            cover_image: resolved.cover_image,
+            preview_url: resolved.preview_url,
+            spotify_url: resolved.spotify_url,
+            blurb: resolved.blurb,
+          },
+          { onConflict: 'date', ignoreDuplicates: true }
+        );
+        ({ data: row } = await supabase.from('daily_drop').select('*').eq('date', date).maybeSingle());
+      }
+      if (cancelled || !row) return;
+      setDrop(row as DropRow);
+
+      const { data: votes } = await supabase.from('daily_drop_votes').select('user_id, vote, played, rated').eq('date', date);
+      const counts: Record<DropVote, number> = { like: 0, dislike: 0, never_heard: 0 };
+      for (const v of (votes ?? []) as any[]) counts[v.vote as DropVote]++;
+      setTally(counts);
+      const mine = (votes ?? []).find((v: any) => v.user_id === user?.id);
+      if (mine) {
+        setMyVote(mine.vote);
+        setRated(!!mine.rated);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const castVote = async (vote: DropVote) => {
+    if (!user?.id || !drop) return;
+    const previous = myVote;
+    setMyVote(vote);
+    setTally((t) => ({
+      ...t,
+      [vote]: t[vote] + 1,
+      ...(previous ? { [previous]: Math.max(0, t[previous] - 1) } : {}),
+    }));
+    await supabase.from('daily_drop_votes').upsert(
+      { date: drop.date, user_id: user.id, vote },
+      { onConflict: 'date,user_id' }
+    );
+  };
+
+  const handlePlay = async () => {
+    if (!drop || !user?.id) return;
+    if (status.playing) {
+      player.pause();
+      return;
+    }
+    player.play();
+    await supabase.from('daily_drop_votes').update({ played: true }).eq('date', drop.date).eq('user_id', user.id);
+    await supabase.from('listening_history').insert({
+      user_id: user.id,
+      track_id: drop.content_type === 'song' ? drop.content_id : null,
+      track_name: drop.content_name,
+      artist_name: drop.artist_name,
+      played_at: new Date().toISOString(),
+      source: 'daily_drop',
+    });
+  };
+
+  const handleRate = () => {
+    if (!drop) return;
+    onOpenRate({
+      id: drop.content_id,
+      type: drop.content_type === 'artist' ? 'song' : (drop.content_type as ContentType),
+      name: drop.content_name,
+      artist_name: drop.artist_name,
+      artist_names: [drop.artist_name],
+      cover_image: drop.cover_image ?? undefined,
+      preview_url: drop.preview_url ?? undefined,
+    });
+  };
+
+  if (loading || !drop) return null;
+
+  const totalVotes = tally.like + tally.dislike + tally.never_heard;
+  const likePct = totalVotes ? Math.round((tally.like / totalVotes) * 100) : 0;
+  const canRate = drop.content_type !== 'artist';
+
+  return (
+    <View style={styles.dropCard}>
+      <View style={styles.dropHeader}>
+        <Text style={styles.dropLabel}>DROP DEL DÍA</Text>
+        {totalVotes > 0 && <Text style={styles.dropTally}>{likePct}% le gustó · {totalVotes} votos</Text>}
+      </View>
+
+      <View style={styles.dropContent}>
+        <CoverImage uri={drop.cover_image} seed={drop.content_name} size={56} radius={10} style={styles.dropCover} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.dropName} numberOfLines={1}>{drop.content_name}</Text>
+          <Text style={styles.dropArtist} numberOfLines={1}>{drop.artist_name}</Text>
+          <Text style={styles.dropBlurb} numberOfLines={2}>{drop.blurb}</Text>
+        </View>
+      </View>
+
+      <View style={styles.dropVoteRow}>
+        {([
+          ['like', 'Me gusta'],
+          ['dislike', 'No me gusta'],
+          ['never_heard', 'Nunca la escuché'],
+        ] as [DropVote, string][]).map(([vote, label]) => (
+          <TouchableOpacity
+            key={vote}
+            style={[styles.dropVoteBtn, myVote === vote && styles.dropVoteBtnActive]}
+            onPress={() => castVote(vote)}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: myVote === vote }}
+          >
+            <Text style={[styles.dropVoteText, myVote === vote && styles.dropVoteTextActive]}>{label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {myVote && (
+        <View style={styles.dropActionRow}>
+          {drop.preview_url && (
+            <TouchableOpacity
+              style={styles.dropActionBtn}
+              onPress={handlePlay}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={status.playing ? 'Pausar' : 'Escuchar'}
+            >
+              <Ionicons name={status.playing ? 'pause' : 'play'} size={16} color="#fff" />
+              <Text style={styles.dropActionText}>{status.playing ? 'Pausar' : 'Escuchar'}</Text>
+            </TouchableOpacity>
+          )}
+          {canRate && (
+            <TouchableOpacity
+              style={[styles.dropActionBtn, styles.dropActionBtnOutline]}
+              onPress={handleRate}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={rated ? 'Ya calificada' : 'Calificar'}
+            >
+              <Ionicons name="star-outline" size={16} color="#A855F7" />
+              <Text style={[styles.dropActionText, { color: '#A855F7' }]}>{rated ? 'Ya calificada' : 'Calificar'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
 export default function FeedScreen() {
+  const router = useRouter();
+  const { user } = useAuthStore();
   const { feed, loadingFeed, loadFeed } = useRatingStore();
+  const { groups: storyGroups, loadStories, publishStory } = useStoryStore();
   const [refreshing, setRefreshing] = useState(false);
   const [rateModalVisible, setRateModalVisible] = useState(false);
   const [localLiked, setLocalLiked] = useState<Set<string>>(new Set());
+  const [presetItem, setPresetItem] = useState<MusicItem | null>(null);
+  const [dropKey, setDropKey] = useState(0);
+  const [createStoryVisible, setCreateStoryVisible] = useState(false);
 
   useEffect(() => {
     loadFeed();
   }, []);
+
+  useEffect(() => {
+    loadStories(user?.id);
+  }, [user?.id]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -377,26 +614,81 @@ export default function FeedScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.logo}>Sonet</Text>
-        <TouchableOpacity activeOpacity={0.7} hitSlop={12}>
-          <Ionicons name="notifications-outline" size={22} color="#666666" />
-        </TouchableOpacity>
+        <View style={styles.headerIcons}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            hitSlop={12}
+            onPress={() => router.push('/chat')}
+            accessibilityRole="button"
+            accessibilityLabel="Mensajes"
+          >
+            <Ionicons name="chatbubbles-outline" size={22} color="#666666" />
+          </TouchableOpacity>
+          <TouchableOpacity activeOpacity={0.7} hitSlop={12} accessibilityRole="button" accessibilityLabel="Notificaciones">
+            <Ionicons name="notifications-outline" size={22} color="#666666" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <FlatList
         data={feed}
         keyExtractor={(item) => item.rating.id}
         renderItem={renderItem}
+        ListHeaderComponent={
+          <>
+            <StoryRail groups={storyGroups} currentUserId={user?.id} onCreatePress={() => setCreateStoryVisible(true)} />
+            <DailyDropCard key={dropKey} onOpenRate={(item) => { setPresetItem(item); setRateModalVisible(true); }} />
+          </>
+        }
         ListEmptyComponent={<ListEmpty />}
         contentContainerStyle={feed.length === 0 ? styles.emptyContainer : styles.listContent}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#A855F7" />}
       />
 
-      <TouchableOpacity style={styles.fab} onPress={() => setRateModalVisible(true)} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setRateModalVisible(true)}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Calificar música"
+      >
         <Ionicons name="add" size={28} color="#FFFFFF" />
       </TouchableOpacity>
 
-      <RateModal visible={rateModalVisible} onClose={() => setRateModalVisible(false)} />
+      <RateModal
+        visible={rateModalVisible}
+        initialItem={presetItem}
+        onClose={() => {
+          setRateModalVisible(false);
+          setPresetItem(null);
+        }}
+        onRated={async () => {
+          if (user?.id) {
+            await supabase
+              .from('daily_drop_votes')
+              .update({ rated: true })
+              .eq('date', todayDateString())
+              .eq('user_id', user.id);
+          }
+          setDropKey((k) => k + 1);
+        }}
+      />
+
+      <CreateStoryModal
+        visible={createStoryVisible}
+        onClose={() => setCreateStoryVisible(false)}
+        onPublish={async (localImageUri, caption, track) => {
+          if (!user) return false;
+          return publishStory(localImageUri, {
+            userId: user.id,
+            caption,
+            track: track
+              ? { id: track.id, name: track.name, artist: track.artist_name, previewUrl: track.preview_url ?? null }
+              : undefined,
+          });
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -416,6 +708,52 @@ const styles = StyleSheet.create({
     borderBottomColor: '#2A2A2A',
   },
   logo: { fontSize: 24, fontWeight: '700', color: '#A855F7' },
+  headerIcons: { flexDirection: 'row', alignItems: 'center', gap: 18 },
+
+  dropCard: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
+    marginHorizontal: 16,
+    marginTop: 10,
+    marginBottom: 4,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  dropHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  dropLabel: { color: '#A855F7', fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  dropTally: { color: '#666666', fontSize: 11, fontWeight: '600' },
+  dropContent: { flexDirection: 'row', gap: 12, marginBottom: 14 },
+  dropCover: { width: 56, height: 56, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  dropCoverInitial: { color: '#FFFFFF', fontWeight: '700', fontSize: 20 },
+  dropName: { color: '#FFFFFF', fontWeight: '700', fontSize: 15 },
+  dropArtist: { color: '#888888', fontSize: 13, marginTop: 1 },
+  dropBlurb: { color: '#666666', fontSize: 12, marginTop: 4, lineHeight: 16 },
+  dropVoteRow: { flexDirection: 'row', gap: 8 },
+  dropVoteBtn: {
+    flex: 1,
+    backgroundColor: '#0D0D0D',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  dropVoteBtnActive: { borderColor: '#A855F7', backgroundColor: 'rgba(168,85,247,0.15)' },
+  dropVoteText: { color: '#888888', fontSize: 11, fontWeight: '600', textAlign: 'center' },
+  dropVoteTextActive: { color: '#C084FC' },
+  dropActionRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
+  dropActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#A855F7',
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+  },
+  dropActionBtnOutline: { backgroundColor: 'transparent', borderWidth: 1, borderColor: '#A855F7' },
+  dropActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 
   listContent: { paddingVertical: 8, paddingBottom: 100 },
   emptyContainer: { flex: 1 },

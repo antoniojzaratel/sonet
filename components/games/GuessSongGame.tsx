@@ -76,8 +76,11 @@ export function GuessSongGame({ onExit }: Props) {
         <TouchableOpacity onPress={onExit} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Adivina 🎵</Text>
-        <Text style={styles.scoreText}>🔥 {attempt.streak}</Text>
+        <Text style={styles.headerTitle}>Adivina</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="flame" size={16} color={Colors.primary} />
+          <Text style={styles.scoreText}>{attempt.streak}</Text>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -86,7 +89,7 @@ export function GuessSongGame({ onExit }: Props) {
         <View style={styles.hintsBox}>
           {hintsShown.map((h, i) => (
             <View key={i} style={styles.hintRow}>
-              <Text style={styles.hintBullet}>🔍</Text>
+              <Ionicons name="search" size={13} color={Colors.textSecondary} style={{ marginTop: 2 }} />
               <Text style={styles.hint}>{h}</Text>
             </View>
           ))}
@@ -110,9 +113,14 @@ export function GuessSongGame({ onExit }: Props) {
         {attempt.guesses.length > 0 && (
           <View style={styles.guessHistory}>
             {attempt.guesses.map((g, i) => (
-              <Text key={i} style={[styles.guessHistoryItem, g.correct && styles.guessHistoryCorrect]}>
-                {g.correct ? '✅' : '❌'} {g.text}
-              </Text>
+              <View key={i} style={styles.guessHistoryRow}>
+                <Ionicons
+                  name={g.correct ? 'checkmark-circle' : 'close-circle'}
+                  size={14}
+                  color={g.correct ? Colors.secondary : Colors.accent}
+                />
+                <Text style={[styles.guessHistoryItem, g.correct && styles.guessHistoryCorrect]}>{g.text}</Text>
+              </View>
             ))}
           </View>
         )}
@@ -140,7 +148,11 @@ export function GuessSongGame({ onExit }: Props) {
           </View>
         ) : (
           <View style={styles.result}>
-            <Text style={styles.resultEmoji}>{attempt.solved ? '✅' : '❌'}</Text>
+            <Ionicons
+              name={attempt.solved ? 'checkmark-circle' : 'close-circle'}
+              size={56}
+              color={attempt.solved ? Colors.secondary : Colors.accent}
+            />
             <Text style={[styles.resultLabel, { color: attempt.solved ? Colors.secondary : Colors.accent }]}>
               {attempt.solved ? '¡Correcto!' : 'No esta vez'}
             </Text>
@@ -187,6 +199,7 @@ const styles = StyleSheet.create({
   attemptDotWrong: { backgroundColor: Colors.accent },
 
   guessHistory: { gap: 4 },
+  guessHistoryRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   guessHistoryItem: { color: Colors.textMuted, fontSize: 14 },
   guessHistoryCorrect: { color: Colors.secondary, fontWeight: '700' },
 

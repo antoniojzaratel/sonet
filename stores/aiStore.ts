@@ -182,12 +182,12 @@ export const useAIStore = create<AIState>((set, get) => ({
 
 function generateMockDateProfiles(myVector: MusicVector): DateProfile[] {
   const mockUsers = [
-    { id: 'm1', name: 'Sofía Ramírez', user: 'sofiamusic', bio: '🎸 Rock lover, conciertos todo el año' },
-    { id: 'm2', name: 'Diego Torres', user: 'diegodj', bio: '🎧 DJ on weekends, reggaeton fan' },
-    { id: 'm3', name: 'Valentina Cruz', user: 'vale_melodies', bio: '🎹 Piano clásico & indie pop' },
-    { id: 'm4', name: 'Carlos Mendez', user: 'carloshiphop', bio: '🎤 Hip-hop y R&B para vivir' },
-    { id: 'm5', name: 'Isabella Font', user: 'isajazz', bio: '🎷 Jazz & soul, café y vinilo' },
-    { id: 'm6', name: 'Andrés Ruiz', user: 'andreselectro', bio: '🎛️ Electronic music producer' },
+    { id: 'm1', name: 'Sofía Ramírez', user: 'sofiamusic', bio: 'Rock lover, conciertos todo el año' },
+    { id: 'm2', name: 'Diego Torres', user: 'diegodj', bio: 'DJ on weekends, reggaeton fan' },
+    { id: 'm3', name: 'Valentina Cruz', user: 'vale_melodies', bio: 'Piano clásico & indie pop' },
+    { id: 'm4', name: 'Carlos Mendez', user: 'carloshiphop', bio: 'Hip-hop y R&B para vivir' },
+    { id: 'm5', name: 'Isabella Font', user: 'isajazz', bio: 'Jazz & soul, café y vinilo' },
+    { id: 'm6', name: 'Andrés Ruiz', user: 'andreselectro', bio: 'Electronic music producer' },
   ];
 
   return mockUsers.map((u) => {

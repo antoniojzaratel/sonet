@@ -13,8 +13,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useRatingStore } from '@/stores/ratingStore';
 import { useAuthStore } from '@/stores/authStore';
+import { useChatStore } from '@/stores/chatStore';
 import { supabase } from '@/lib/supabase';
 import { searchMusic, type MusicItem } from '@/lib/musicDB';
 import { CompareDuel, type DuelItem } from '@/components/rating/CompareDuel';
@@ -23,6 +25,11 @@ import type { RatingEntry } from '@/stores/ratingStore';
 import { computeMatch } from '@/lib/ai/matchEngine';
 import type { MusicVector } from '@/lib/ai/tasteVector';
 import type { ContentType } from '@/types';
+import { ReportModal } from '@/components/safety/ReportModal';
+import { fetchBlockedIds, blockUser } from '@/lib/blocking';
+import { CoverImage } from '@/components/CoverImage';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { searchDemoCatalog } from '@/lib/demoContent';
 
 type MainTab = 'musica' | 'personas';
 
@@ -114,15 +121,7 @@ function RateModalSheet({ item, onClose }: RateModalSheetProps) {
         ) : (
           <>
             <View style={modalStyles.previewRow}>
-              {item.cover_image ? (
-                <View style={modalStyles.cover}>
-                  <Text style={modalStyles.coverInitial}>{item.name.charAt(0).toUpperCase()}</Text>
-                </View>
-              ) : (
-                <View style={[modalStyles.cover, { backgroundColor: '#A855F7' }]}>
-                  <Text style={modalStyles.coverInitial}>{item.name.charAt(0).toUpperCase()}</Text>
-                </View>
-              )}
+              <CoverImage uri={item.cover_image} seed={item.name} size={56} radius={10} style={modalStyles.cover} />
               <View style={modalStyles.previewInfo}>
                 <Text style={modalStyles.previewName} numberOfLines={1}>{item.name}</Text>
                 <Text style={modalStyles.previewArtist} numberOfLines={1}>{item.artist_name}</Text>
@@ -159,42 +158,54 @@ function RateModalSheet({ item, onClose }: RateModalSheetProps) {
 // --------------- MusicTab ---------------
 
 function MusicTab() {
-  const { spotifyToken } = useAuthStore();
+  const { spotifyToken, isRichDemo } = useAuthStore();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<MusicItem[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedItem, setSelectedItem] = useState<MusicItem | null>(null);
 
-  const runSearch = useCallback(
-    async (q: string) => {
-      setQuery(q);
-      if (!q.trim()) {
-        setResults([]);
-        return;
-      }
-      setSearching(true);
-      try {
-        const items = await searchMusic({
-          query: q,
-          types: ['song', 'album'] as ContentType[],
-          accessToken: spotifyToken ?? undefined,
-          limit: 15,
-        });
-        setResults(items);
-      } catch {
-        setResults([]);
-      }
-      setSearching(false);
-    },
-    [spotifyToken]
-  );
+  // See app/(tabs)/index.tsx's rate-modal search for the same pattern:
+  // typing updates the input immediately, the Spotify call only fires
+  // ~350ms after typing pauses, not on every keystroke.
+  const debouncedQuery = useDebouncedValue(query, 350);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!debouncedQuery.trim()) {
+      setResults([]);
+      return;
+    }
+    // Demo account: search a local catalog instead of Spotify, so there's
+    // always something real-looking to rate even with no token connected.
+    if (isRichDemo) {
+      setResults(searchDemoCatalog(debouncedQuery));
+      return;
+    }
+    setSearching(true);
+    searchMusic({
+      query: debouncedQuery,
+      types: ['song', 'album'] as ContentType[],
+      accessToken: spotifyToken ?? undefined,
+      limit: 15,
+    })
+      .then((items) => {
+        if (!cancelled) setResults(items);
+      })
+      .catch(() => {
+        if (!cancelled) setResults([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSearching(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedQuery, spotifyToken]);
 
   function renderItem({ item }: { item: MusicItem }) {
     return (
       <View style={styles.catalogRow}>
-        <View style={[styles.catalogCover, { backgroundColor: '#A855F7' }]}>
-          <Text style={styles.catalogCoverInitial}>{item.name.charAt(0).toUpperCase()}</Text>
-        </View>
+        <CoverImage uri={item.cover_image} seed={item.name} size={48} radius={8} style={styles.catalogCover} />
         <View style={styles.catalogInfo}>
           <Text style={styles.catalogName} numberOfLines={1}>{item.name}</Text>
           <Text style={styles.catalogArtist}>{item.artist_name}</Text>
@@ -216,13 +227,13 @@ function MusicTab() {
           placeholder="Buscar canciones, álbumes..."
           placeholderTextColor="#666666"
           value={query}
-          onChangeText={runSearch}
+          onChangeText={setQuery}
           returnKeyType="search"
           autoCorrect={false}
         />
         {searching && <ActivityIndicator size="small" color="#A855F7" />}
         {!searching && query.length > 0 && (
-          <TouchableOpacity onPress={() => runSearch('')}>
+          <TouchableOpacity onPress={() => setQuery('')}>
             <Ionicons name="close-circle" size={18} color="#666666" />
           </TouchableOpacity>
         )}
@@ -263,6 +274,10 @@ interface PersonRow {
   ratingsCount: number;
   isFollowing: boolean;
   matchScore: number | null;
+  /** Friend request state — distinct from "Seguir" (an instant follow): a
+   * request the other person would need to accept in a real backend. Local
+   * UI state only for now, no `friend_requests` table exists yet. */
+  friendRequest: 'none' | 'sent';
 }
 
 function initialsOf(name: string): string {
@@ -277,9 +292,12 @@ function initialsOf(name: string): string {
 }
 
 function PeopleTab() {
+  const router = useRouter();
   const { user } = useAuthStore();
+  const { getOrCreateConversation } = useChatStore();
   const [people, setPeople] = useState<PersonRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [reportTarget, setReportTarget] = useState<string | null>(null);
 
   const loadPeople = useCallback(async () => {
     if (!user?.id) {
@@ -288,18 +306,21 @@ function PeopleTab() {
     }
     setLoading(true);
 
-    const [{ data: allUsers }, { data: follows }, { data: myProfile }] = await Promise.all([
+    const [{ data: allUsersRaw }, { data: follows }, { data: myProfile }, blockedIds] = await Promise.all([
       supabase.from('users').select('id, username, display_name, avatar_url, ratings_count').neq('id', user.id).limit(50),
       supabase.from('follows').select('following_id').eq('follower_id', user.id),
       supabase.from('music_profiles').select('feature_vector').eq('user_id', user.id).single(),
+      fetchBlockedIds(user.id),
     ]);
+
+    const allUsers = (allUsersRaw ?? []).filter((u: any) => !blockedIds.has(u.id));
 
     const followingIds = new Set((follows ?? []).map((f: any) => f.following_id));
     const myVector = (myProfile?.feature_vector as MusicVector | undefined) ?? null;
 
     let candidateIds: string[] = [];
     let profilesById: Record<string, MusicVector> = {};
-    if (myVector && allUsers?.length) {
+    if (myVector && allUsers.length) {
       candidateIds = allUsers.map((u: any) => u.id);
       const { data: profiles } = await supabase
         .from('music_profiles')
@@ -308,7 +329,7 @@ function PeopleTab() {
       profilesById = Object.fromEntries((profiles ?? []).map((p: any) => [p.user_id, p.feature_vector as MusicVector]));
     }
 
-    const rows: PersonRow[] = (allUsers ?? []).map((u: any) => {
+    const rows: PersonRow[] = allUsers.map((u: any) => {
       const theirVector = profilesById[u.id];
       const matchScore = myVector && theirVector ? computeMatch(myVector, theirVector).score : null;
       return {
@@ -319,6 +340,7 @@ function PeopleTab() {
         ratingsCount: u.ratings_count ?? 0,
         isFollowing: followingIds.has(u.id),
         matchScore,
+        friendRequest: 'none' as const,
       };
     });
 
@@ -356,6 +378,45 @@ function PeopleTab() {
     }
   }
 
+  function sendFriendRequest(person: PersonRow) {
+    if (person.friendRequest === 'sent') return;
+    setPeople((prev) => prev.map((p) => (p.id === person.id ? { ...p, friendRequest: 'sent' } : p)));
+    // No `friend_requests` table yet — this is real UI state, not persisted.
+    // A production version would insert a pending row the other person accepts.
+  }
+
+  async function openDM(person: PersonRow) {
+    if (!user?.id) return;
+    const conversationId = await getOrCreateConversation(user.id, person.id);
+    if (conversationId) router.push(`/chat/${conversationId}`);
+  }
+
+  function openMoreMenu(person: PersonRow) {
+    Alert.alert(person.displayName, undefined, [
+      { text: 'Reportar', onPress: () => setReportTarget(person.id) },
+      {
+        text: 'Bloquear',
+        style: 'destructive',
+        onPress: () => {
+          if (!user?.id) return;
+          Alert.alert('¿Bloquear a este usuario?', 'No volverán a verse en Discover ni SoundMatch, y no podrán escribirte.', [
+            { text: 'Cancelar', style: 'cancel' },
+            {
+              text: 'Bloquear',
+              style: 'destructive',
+              onPress: async () => {
+                const ok = await blockUser(user.id, person.id);
+                if (ok) setPeople((prev) => prev.filter((p) => p.id !== person.id));
+                else Alert.alert('Error', 'No se pudo bloquear. Intenta de nuevo.');
+              },
+            },
+          ]);
+        },
+      },
+      { text: 'Cancelar', style: 'cancel' },
+    ]);
+  }
+
   function renderUser(person: PersonRow) {
     return (
       <View key={person.id} style={styles.personRow}>
@@ -369,6 +430,27 @@ function PeopleTab() {
             {person.ratingsCount} calificaciones{person.matchScore !== null ? ` · ${person.matchScore}% match` : ''}
           </Text>
         </View>
+        <TouchableOpacity
+          onPress={() => sendFriendRequest(person)}
+          activeOpacity={0.7}
+          hitSlop={10}
+          style={{ marginRight: 6 }}
+          disabled={person.friendRequest === 'sent'}
+          accessibilityRole="button"
+          accessibilityLabel={person.friendRequest === 'sent' ? 'Solicitud enviada' : 'Agregar amigo'}
+        >
+          <Ionicons
+            name={person.friendRequest === 'sent' ? 'checkmark-circle' : 'person-add-outline'}
+            size={20}
+            color={person.friendRequest === 'sent' ? '#84CC16' : '#A1A1AA'}
+          />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => openDM(person)} activeOpacity={0.7} hitSlop={10} style={{ marginRight: 6 }}>
+          <Ionicons name="chatbubble-outline" size={20} color="#A1A1AA" />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => openMoreMenu(person)} activeOpacity={0.7} hitSlop={10} style={{ marginRight: 10 }}>
+          <Ionicons name="ellipsis-vertical" size={18} color="#666666" />
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.followBtn, person.isFollowing ? styles.followBtnActive : styles.followBtnPrimary]}
           onPress={() => toggleFollow(person)}
@@ -408,6 +490,13 @@ function PeopleTab() {
         </>
       )}
       {people.length === 0 && <Text style={styles.emptyText}>Aún no hay otras personas en Sonet.</Text>}
+
+      <ReportModal
+        visible={!!reportTarget}
+        onClose={() => setReportTarget(null)}
+        targetType="user"
+        targetId={reportTarget ?? ''}
+      />
     </>
   );
 }

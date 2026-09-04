@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
+import { track } from '@/lib/analytics';
+import { useAuthStore } from '@/stores/authStore';
+import { DEMO_USER_ID, DEMO_RATINGS, DEMO_FEED } from '@/lib/demoContent';
 import {
   insertByComparison,
   buildRankedList,
@@ -95,6 +98,10 @@ export const useRatingStore = create<RatingStore>((set, get) => ({
   loadingFeed: false,
 
   loadRatings: async (userId) => {
+    if (userId === DEMO_USER_ID) {
+      set({ ratings: DEMO_RATINGS, loading: false });
+      return;
+    }
     set({ loading: true });
     const { data, error } = await supabase
       .from('ratings')
@@ -106,6 +113,10 @@ export const useRatingStore = create<RatingStore>((set, get) => ({
   },
 
   loadFeed: async () => {
+    if (useAuthStore.getState().isRichDemo) {
+      set({ feed: DEMO_FEED, loadingFeed: false });
+      return;
+    }
     set({ loadingFeed: true });
     const { data, error } = await supabase
       .from('ratings')
@@ -132,6 +143,48 @@ export const useRatingStore = create<RatingStore>((set, get) => ({
 
   addRating: async (input) => {
     const { userId, contentType, bucket, compare } = input;
+
+    // Demo account: run the exact same ranking algorithm entirely in
+    // memory, no Supabase round-trip — so rating something live during a
+    // demo works even with no backend configured, and the new rating
+    // shows up in the Feed immediately.
+    if (userId === DEMO_USER_ID) {
+      const existing = get().ratings.filter((r) => r.contentType === contentType);
+      const buckets: Record<Bucket, RatingEntry[]> = {
+        liked: existing.filter((r) => r.bucket === 'liked'),
+        fine: existing.filter((r) => r.bucket === 'fine'),
+        disliked: existing.filter((r) => r.bucket === 'disliked'),
+      };
+      const newItem: RatingEntry = {
+        id: `demo-${Date.now()}`,
+        contentId: input.contentId,
+        contentName: input.contentName,
+        artistName: input.artistName,
+        imageUrl: input.imageUrl,
+        contentType,
+        score: 0,
+        bucket,
+        rankPosition: 0,
+        review: input.review,
+        createdAt: new Date().toISOString(),
+      };
+      const { ordered } = await insertByComparison(buckets[bucket], newItem, compare);
+      buckets[bucket] = ordered;
+      const ranked = buildRankedList(buckets);
+      const rankedEntries = ranked.map((r) => ({ ...r.item, bucket: r.bucket, rankPosition: r.rankPosition, score: r.score }));
+
+      set((state) => ({
+        ratings: [...state.ratings.filter((r) => r.contentType !== contentType), ...rankedEntries].sort(
+          (a, b) => a.rankPosition - b.rankPosition
+        ),
+        feed: [
+          { rating: rankedEntries.find((r) => r.contentId === input.contentId)!, user: { id: userId, displayName: 'Alex Rivera', username: 'alexdemo' } },
+          ...state.feed,
+        ],
+      }));
+
+      return rankedEntries.find((r) => r.contentId === input.contentId) ?? null;
+    }
 
     // 1. Pull the user's existing strict order for this content type.
     const { data: existingRows, error: fetchError } = await supabase
@@ -214,7 +267,9 @@ export const useRatingStore = create<RatingStore>((set, get) => ({
       ),
     }));
 
-    return saved.find((r) => r.contentId === input.contentId) ?? null;
+    const own = saved.find((r) => r.contentId === input.contentId) ?? null;
+    if (own) track('rating_created', { content_type: contentType, bucket });
+    return own;
   },
 
   removeRating: async (userId, contentId, contentType) => {

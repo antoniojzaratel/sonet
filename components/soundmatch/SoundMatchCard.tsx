@@ -87,10 +87,10 @@ export function SoundMatchCard({ candidate, onLike, onPass, onSuperLike, isTop }
       {isTop && (
         <>
           <Animated.View style={[styles.overlay, styles.likeOverlay, { opacity: likeOpacity }]}>
-            <Text style={styles.overlayText}>♥ LIKE</Text>
+            <Text style={styles.overlayText}>LIKE</Text>
           </Animated.View>
           <Animated.View style={[styles.overlay, styles.passOverlay, { opacity: passOpacity }]}>
-            <Text style={styles.overlayText}>✕ PASS</Text>
+            <Text style={styles.overlayText}>PASS</Text>
           </Animated.View>
         </>
       )}
@@ -98,7 +98,7 @@ export function SoundMatchCard({ candidate, onLike, onPass, onSuperLike, isTop }
       {/* Blind profile: no photo, no name — just the taste match visual */}
       <View style={styles.avatarSection}>
         <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.avatar}>
-          <Text style={styles.avatarGlyph}>🎧</Text>
+          <Ionicons name="person" size={64} color="rgba(255,255,255,0.85)" />
         </LinearGradient>
         <LinearGradient
           colors={['transparent', 'rgba(13,13,13,0.9)']}

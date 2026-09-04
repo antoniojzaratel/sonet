@@ -4,6 +4,7 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '@/lib/supabase';
 import { DEMO_USER } from '@/lib/demoContent';
+import { unregisterPushToken } from '@/lib/push';
 import type { User } from '@/types';
 
 interface SpotifyProfile {
@@ -161,7 +162,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signInWithApple: () => signInWithOAuthProvider('apple'),
 
   signOut: async () => {
-    if (!get().isRichDemo) await supabase.auth.signOut();
+    const userId = get().user?.id;
+    if (!get().isRichDemo) {
+      if (userId) await unregisterPushToken(userId);
+      await supabase.auth.signOut();
+    }
     await AsyncStorage.removeItem('spotify_access_token');
     set({ user: null, session: null, spotifyToken: null, spotifyRefreshToken: null, spotifyProfile: null, isRichDemo: false });
   },

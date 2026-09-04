@@ -439,6 +439,38 @@ CREATE INDEX idx_compat_user_a ON compatibility_scores(user_a, taste_score DESC)
 CREATE INDEX idx_compat_user_b ON compatibility_scores(user_b, taste_score DESC);
 
 -- ============================================================
+-- AI — MUSIC DNA (backend/music_dna.py's 256-dim embedding + raw signals)
+-- Separate from music_profiles (matchEngine.ts's 22-dim client-side vector):
+-- this is the Python backend's richer SVM-compatibility input, written via
+-- the service role from backend/main.py's /dna/build endpoint.
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS music_dna (
+  user_id               UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  embedding             FLOAT8[],     -- 256-dim, backend/music_dna.py build_embedding()
+  top_genres            JSONB,        -- [{genre, weight}]
+  top_languages         JSONB,        -- [{lang, weight}]
+  top_eras              JSONB,        -- [{decade, weight}]
+  top_artists           JSONB,        -- [{id, name, play_count}]
+  top_tracks            TEXT[],
+  avg_bpm               FLOAT,
+  avg_energy            FLOAT,
+  avg_valence           FLOAT,
+  avg_danceability      FLOAT,
+  avg_acousticness      FLOAT,
+  avg_instrumentalness  FLOAT,
+  avg_loudness          FLOAT,
+  avg_speechiness       FLOAT,
+  listening_peak_hour   INT,
+  avg_track_duration_s  FLOAT,
+  skip_rate             FLOAT,
+  repeat_rate           FLOAT,
+  discovery_rate        FLOAT,
+  total_tracks_analyzed INT DEFAULT 0,
+  updated_at            TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
 -- AI — DAILY RECOMMENDATIONS (Song of the Day)
 -- ============================================================
 
@@ -1045,7 +1077,12 @@ BEGIN
   END IF;
   RETURN NULL;
 END;
-$$ LANGUAGE plpgsql;
+-- SECURITY DEFINER: the second UPDATE targets the *other* user's row
+-- (followers_count on following_id, not the caller). Without this, RLS's
+-- users_update_own (auth.uid() = id) filters that UPDATE to zero rows —
+-- Postgres doesn't error on an RLS-filtered 0-row UPDATE, it just silently
+-- no-ops, so followers_count was permanently stuck for every user.
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 CREATE TRIGGER trigger_follow_counts
 AFTER INSERT OR DELETE ON follows
@@ -1080,6 +1117,7 @@ RETURNS TRIGGER AS $$
 DECLARE
   v_conv_id UUID;
   v_score   FLOAT;
+  v_matched BOOLEAN;
 BEGIN
   IF NEW.action IN ('like', 'super_like') THEN
     IF EXISTS (
@@ -1088,36 +1126,60 @@ BEGIN
         AND target_id = NEW.swiper_id
         AND action IN ('like', 'super_like')
     ) THEN
-      INSERT INTO conversations (participants)
-      VALUES (ARRAY[NEW.swiper_id, NEW.target_id])
-      RETURNING id INTO v_conv_id;
-
       SELECT taste_score INTO v_score
       FROM compatibility_scores
       WHERE (user_a = LEAST(NEW.swiper_id, NEW.target_id) AND user_b = GREATEST(NEW.swiper_id, NEW.target_id));
 
+      -- Only create the conversation + notifications if this match row is
+      -- actually new — ON CONFLICT DO NOTHING alone would still leave an
+      -- orphaned conversation behind on a re-fired trigger (e.g. a swipe
+      -- upsert landing on UPDATE instead of INSERT for a pair that already
+      -- matched).
       INSERT INTO soundmatch_matches (user_a, user_b, taste_score, conversation_id, icebreaker)
       VALUES (
         LEAST(NEW.swiper_id, NEW.target_id),
         GREATEST(NEW.swiper_id, NEW.target_id),
         COALESCE(v_score, 0),
-        v_conv_id,
+        NULL,
         '¡Match! Tienen ' || ROUND(COALESCE(v_score, 0)::numeric, 0) || '% de compatibilidad musical 🎵'
       )
       ON CONFLICT DO NOTHING;
+      GET DIAGNOSTICS v_matched = ROW_COUNT;
 
-      INSERT INTO notifications (user_id, type, actor_id, content)
-      VALUES
-        (NEW.swiper_id, 'soundmatch_match', NEW.target_id, '¡Nuevo SoundMatch! Empiecen a hablar 🎵'),
-        (NEW.target_id, 'soundmatch_match', NEW.swiper_id, '¡Nuevo SoundMatch! Empiecen a hablar 🎵');
+      IF v_matched THEN
+        INSERT INTO conversations (participants)
+        VALUES (ARRAY[NEW.swiper_id, NEW.target_id])
+        RETURNING id INTO v_conv_id;
+
+        UPDATE soundmatch_matches SET conversation_id = v_conv_id
+        WHERE user_a = LEAST(NEW.swiper_id, NEW.target_id) AND user_b = GREATEST(NEW.swiper_id, NEW.target_id);
+
+        INSERT INTO notifications (user_id, type, actor_id, content)
+        VALUES
+          (NEW.swiper_id, 'soundmatch_match', NEW.target_id, '¡Nuevo SoundMatch! Empiecen a hablar 🎵'),
+          (NEW.target_id, 'soundmatch_match', NEW.swiper_id, '¡Nuevo SoundMatch! Empiecen a hablar 🎵');
+      END IF;
     END IF;
   END IF;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+-- SECURITY DEFINER is required, not optional: swipes_own's RLS (auth.uid()
+-- = swiper_id) means the caller can only ever see their OWN swipe rows —
+-- the EXISTS check above needs to read the *other* user's row to detect a
+-- mutual like, and the INSERTs into soundmatch_matches (no INSERT policy
+-- exists), conversations, and notifications (for the other user, blocked by
+-- notifications_own) all fail under RLS too. Without this, real client
+-- swipes could never produce a match at all, regardless of the INSERT vs
+-- UPDATE timing fixed below. Matches the pattern already used by
+-- check_daily_guess/check_race_guess/delete_own_account elsewhere in this file.
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
+-- Fires on UPDATE too: the app upserts into soundmatch_swipes (PK is
+-- swiper_id+target_id), so a re-swipe of the same pair lands as an UPDATE,
+-- not an INSERT — without this the mutual match would silently never fire.
+DROP TRIGGER IF EXISTS trigger_soundmatch_mutual ON soundmatch_swipes;
 CREATE TRIGGER trigger_soundmatch_mutual
-AFTER INSERT ON soundmatch_swipes
+AFTER INSERT OR UPDATE OF action ON soundmatch_swipes
 FOR EACH ROW EXECUTE FUNCTION check_soundmatch_mutual();
 
 CREATE OR REPLACE FUNCTION update_conversation_timestamp()
@@ -1139,11 +1201,13 @@ FOR EACH ROW EXECUTE FUNCTION update_conversation_timestamp();
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ratings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE follows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rating_duels ENABLE ROW LEVEL SECURITY;
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE music_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE music_dna ENABLE ROW LEVEL SECURITY;
 ALTER TABLE compatibility_scores ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_recommendations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE soundmatch_profiles ENABLE ROW LEVEL SECURITY;
@@ -1161,6 +1225,13 @@ CREATE POLICY "users_insert_own" ON users FOR INSERT WITH CHECK (auth.uid() = id
 
 -- Secrets: owner only, full stop.
 CREATE POLICY "user_secrets_owner" ON user_secrets FOR ALL USING (auth.uid() = user_id);
+
+-- Follows: public reads (needed for follower/following lists + counts),
+-- but only the follower can create/delete their own follow relationship —
+-- this table had no RLS at all before, letting any signed-in client forge
+-- or delete arbitrary follow rows for other people.
+CREATE POLICY "follows_read_all" ON follows FOR SELECT USING (true);
+CREATE POLICY "follows_write_own" ON follows FOR ALL USING (auth.uid() = follower_id);
 
 -- Ratings: public reads (needed for feed/profile/taste-match), own writes
 CREATE POLICY "ratings_read_all" ON ratings FOR SELECT USING (true);
@@ -1185,6 +1256,13 @@ CREATE POLICY "messages_participants" ON messages FOR ALL
 -- Music profiles: public read (client-side matching needs to compare vectors), owner writes
 CREATE POLICY "music_profiles_read_all" ON music_profiles FOR SELECT USING (true);
 CREATE POLICY "music_profiles_own" ON music_profiles FOR ALL USING (auth.uid() = user_id);
+
+-- Music DNA: only ever read/written by the backend's service role (bypasses
+-- RLS entirely), so this is defense-in-depth for direct client access — owner
+-- only, no cross-user reads (unlike music_profiles, which needs public reads
+-- for the client-side match path; the Python /compatibility endpoint reads
+-- both users' DNA server-side under the service role instead).
+CREATE POLICY "music_dna_own" ON music_dna FOR ALL USING (auth.uid() = user_id);
 
 CREATE POLICY "compat_scores_participant" ON compatibility_scores FOR SELECT
   USING (auth.uid() = user_a OR auth.uid() = user_b);

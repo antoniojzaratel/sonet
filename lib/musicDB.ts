@@ -5,17 +5,24 @@
  * - Songs / Tracks (Spotify)
  * - Albums (Spotify)
  * - Podcasts & Episodes (Spotify)
- * - Concerts (Ticketmaster)
+ * - Concerts (Ticketmaster + Songkick + Bandsintown + SeatGeek, merged & deduped)
  * - Music Videos (YouTube)
+ * - Artist metadata enrichment (MusicBrainz + Discogs + Last.fm)
+ *
+ * Every extra source is optional: each client no-ops (returns [] / null)
+ * when its API key env var isn't set, so the app degrades gracefully to
+ * whichever sources are actually configured.
  *
  * Results are normalized to a common MusicItem shape and optionally
  * cached in Supabase for offline access and cross-user discovery.
  */
 
 import { searchSpotify } from './spotify';
-import { searchConcerts } from './ticketmaster';
+import { searchAllConcerts } from './concerts';
 import { searchMusicVideos } from './youtube';
 import type { ContentType } from '@/types';
+
+export { enrichArtist, type EnrichedArtist } from './artistMetadata';
 
 export interface MusicItem {
   id: string;
@@ -144,10 +151,11 @@ async function searchConcertsNormalized(
   location?: { lat: number; lng: number },
 ): Promise<MusicItem[]> {
   try {
-    const concerts = await searchConcerts({
+    const concerts = await searchAllConcerts({
       keyword: q,
+      location,
+      radiusKm: 100,
       size: limit,
-      ...(location && { latlong: `${location.lat},${location.lng}`, radius: 100 }),
     });
     return concerts.map((c) => ({
       id: c.id,
@@ -200,10 +208,15 @@ export async function getAudioFeatures(
   accessToken: string,
 ): Promise<any[]> {
   if (!trackIds.length || !accessToken) return [];
-  const ids = trackIds.slice(0, 100).join(',');
-  const res = await fetch(`https://api.spotify.com/v1/audio-features?ids=${ids}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const data = await res.json();
-  return data?.audio_features?.filter(Boolean) ?? [];
+  try {
+    const ids = trackIds.slice(0, 100).join(',');
+    const res = await fetch(`https://api.spotify.com/v1/audio-features?ids=${ids}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data?.audio_features?.filter(Boolean) ?? [];
+  } catch {
+    return [];
+  }
 }

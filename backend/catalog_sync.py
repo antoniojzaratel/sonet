@@ -280,21 +280,47 @@ async def run_full_sync(
     youtube_api_key: str,
     supabase: Client,
 ) -> dict:
-    """Run all catalog sync jobs. Called nightly."""
+    """Run all catalog sync jobs. Called nightly.
+
+    Each unit (a genre, a city) is isolated in its own try/except — one bad
+    API response (expired app token, unexpected shape from a rate-limited
+    call) used to raise out of the whole function and silently skip every
+    category scheduled after it for the night, while still reporting as a
+    normal run to the caller. Failures are now collected and returned
+    instead of swallowing the rest of the sync.
+    """
     token = await get_spotify_app_token(spotify_client_id, spotify_client_secret)
     results = {"tracks": 0, "albums": 0, "podcasts": 0, "concerts": 0, "videos": 0}
+    errors: list[str] = []
 
     for genre in GENRES_TO_SYNC:
-        results["tracks"] += await sync_tracks_by_genre(token, genre, supabase)
-        results["albums"] += await sync_albums_by_genre(token, genre, supabase)
+        try:
+            results["tracks"] += await sync_tracks_by_genre(token, genre, supabase)
+        except Exception as e:
+            errors.append(f"tracks[{genre}]: {e}")
+        try:
+            results["albums"] += await sync_albums_by_genre(token, genre, supabase)
+        except Exception as e:
+            errors.append(f"albums[{genre}]: {e}")
 
-    results["podcasts"] = await sync_podcasts(token, supabase)
+    try:
+        results["podcasts"] = await sync_podcasts(token, supabase)
+    except Exception as e:
+        errors.append(f"podcasts: {e}")
 
     if ticketmaster_api_key:
         for city in ["Mexico City", "Monterrey", "Guadalajara", "Los Angeles", "New York", "Miami"]:
-            results["concerts"] += await sync_concerts(ticketmaster_api_key, supabase, city)
+            try:
+                results["concerts"] += await sync_concerts(ticketmaster_api_key, supabase, city)
+            except Exception as e:
+                errors.append(f"concerts[{city}]: {e}")
 
     if youtube_api_key:
-        results["videos"] = await sync_music_videos(youtube_api_key, supabase)
+        try:
+            results["videos"] = await sync_music_videos(youtube_api_key, supabase)
+        except Exception as e:
+            errors.append(f"videos: {e}")
 
+    if errors:
+        results["errors"] = errors
     return results

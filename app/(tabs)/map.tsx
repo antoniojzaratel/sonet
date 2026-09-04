@@ -19,7 +19,8 @@ import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { Colors, Spacing, Radius } from '@/constants/colors';
-import { searchConcerts, type ConcertResult } from '@/lib/ticketmaster';
+import { searchAllConcerts } from '@/lib/concerts';
+import type { ConcertResult } from '@/lib/ticketmaster';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { isPremium as checkIsPremium } from '@/lib/purchases';
@@ -327,7 +328,7 @@ export default function MapScreen() {
       return;
     }
     setLoading(true);
-    let results = await searchConcerts({ latlong: `${city.lat},${city.lng}`, radius: 100, size: 30 });
+    let results = await searchAllConcerts({ location: { lat: city.lat, lng: city.lng }, radiusKm: 100, size: 30 });
 
     if (results.length === 0) {
       // Live API unavailable (no key yet, or no results) — fall back to whatever's cached.
@@ -449,7 +450,7 @@ export default function MapScreen() {
     // instead of resolving lat/lng, so the map re-centers loosely rather
     // than precisely for a searched city.
     setLoading(true);
-    const results = await searchConcerts({ city: citySearch, size: 30 });
+    const results = await searchAllConcerts({ city: citySearch, size: 30 });
     setConcerts(results);
     if (results[0]) setCenter({ name: citySearch, lat: results[0].latitude, lng: results[0].longitude });
     setLoading(false);
@@ -488,9 +489,15 @@ export default function MapScreen() {
       }
     } else {
       if (communityAttendance.has(item.id)) return; // already attending — the party link covers the rest
-      await supabase.from('event_attendees').insert({ event_id: item.id, user_id: user.id });
-      await supabase.rpc('increment_event_attendees', { event_id: item.id });
+      // Rely on the insert's own PK conflict (event_id, user_id) to detect a
+      // double-tap that raced past the `communityAttendance` check above —
+      // that check reads state that hasn't re-rendered yet on a fast second
+      // tap, so without this the RPC below used to fire twice and inflate
+      // attendees_count with no compensating decrement anywhere.
+      const { error } = await supabase.from('event_attendees').insert({ event_id: item.id, user_id: user.id });
       setCommunityAttendance((prev) => new Set(prev).add(item.id));
+      if (error) return;
+      await supabase.rpc('increment_event_attendees', { event_id: item.id });
       loadCommunityEvents();
     }
   };

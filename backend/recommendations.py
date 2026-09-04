@@ -6,7 +6,6 @@ import numpy as np
 from datetime import date, timedelta
 from typing import Optional
 from supabase import Client
-from music_dna import build_embedding, AUDIO_SLICE, GENRE_SLICE
 
 
 WEIGHTS = {

@@ -2,6 +2,7 @@
 Music DNA Builder
 Constructs a 256-dim taste vector per user from Spotify data + rating history.
 """
+import hashlib
 import numpy as np
 from typing import Optional
 from supabase import create_client, Client
@@ -107,7 +108,11 @@ def _artist_embedding(top_artists: list[dict]) -> np.ndarray:
         if not artist_id:
             continue
         weight = float(item.get("play_count", 1))
-        rng = np.random.default_rng(abs(hash(artist_id)) % (2**32))
+        # Python's built-in hash() is randomized per-process (PYTHONHASHSEED) —
+        # using it here would make the "stable" embedding drift on every
+        # backend restart/deploy. md5 is deterministic across processes.
+        stable_hash = int(hashlib.md5(artist_id.encode("utf-8")).hexdigest(), 16)
+        rng = np.random.default_rng(stable_hash % (2**32))
         proj = rng.standard_normal(N_ARTIST)
         proj /= np.linalg.norm(proj) + 1e-9
         vec += proj * weight

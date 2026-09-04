@@ -37,8 +37,20 @@ Red social de música estilo Beli (app de restaurantes) pero para comunidad musi
 | API | Propósito | Env var |
 |-----|-----------|---------|
 | Spotify Web API | Canciones, albums, audio features, podcasts | `EXPO_PUBLIC_SPOTIFY_CLIENT_ID` |
-| Ticketmaster Discovery | Conciertos en tiempo real | `EXPO_PUBLIC_TICKETMASTER_API_KEY` |
+| Ticketmaster Discovery | Conciertos en tiempo real (fuente primaria) | `EXPO_PUBLIC_TICKETMASTER_API_KEY` |
+| Songkick | Conciertos adicionales, tour tracking | `EXPO_PUBLIC_SONGKICK_API_KEY` |
+| Bandsintown | Conciertos adicionales, por artista | `EXPO_PUBLIC_BANDSINTOWN_APP_ID` |
+| SeatGeek | Conciertos adicionales, pricing secundario | `EXPO_PUBLIC_SEATGEEK_CLIENT_ID` |
 | YouTube Data v3 | Music videos | `EXPO_PUBLIC_YOUTUBE_API_KEY` |
+| MusicBrainz | Metadata canónica de artistas/releases (sin key) | — |
+| Discogs | Géneros/styles detallados por release | `EXPO_PUBLIC_DISCOGS_TOKEN` |
+| Last.fm | Tags, artistas similares, popularidad | `EXPO_PUBLIC_LASTFM_API_KEY` |
+
+Todas las fuentes extra son opcionales: cada cliente (`lib/musicbrainz.ts`, `lib/discogs.ts`, `lib/lastfm.ts`,
+`lib/songkick.ts`, `lib/bandsintown.ts`, `lib/seatgeek.ts`) regresa `[]`/`null` si falta su key, así que la app
+degrada con gracia a las fuentes que sí estén configuradas. `lib/concerts.ts` (`searchAllConcerts`) mezcla y
+deduplica conciertos de las 4 fuentes; `lib/artistMetadata.ts` (`enrichArtist`) mezcla metadata de artista de
+MusicBrainz + Discogs + Last.fm. Ambos están integrados en `lib/musicDB.ts`, la interfaz unificada de búsqueda.
 
 ---
 
@@ -232,10 +244,14 @@ EXPO_PUBLIC_ML_API_URL=http://localhost:8000
 
 ### Supabase Setup
 1. Crear proyecto en supabase.com
-2. SQL Editor → ejecutar `supabase/schema.sql`
-3. SQL Editor → ejecutar `supabase/schema_v2.sql`
-4. Authentication → Providers → habilitar Google, Apple, Email
-5. Copiar URL + Anon Key al `.env.local`
+2. SQL Editor → ejecutar `supabase/schema.sql` (proyecto nuevo — todo el schema en un solo archivo)
+3. Authentication → Providers → habilitar Google, Apple, Email
+4. Copiar URL + Anon Key al `.env.local`
+
+Si el proyecto **ya existía** antes del 2026-09-04, correr también
+`supabase/patch_2026-09-04_bugfixes.sql` — son los fixes de RLS/triggers de
+esa fecha (ya están integrados en `schema.sql` para proyectos nuevos, este
+patch es solo para no tener que recrear la base de datos existente).
 
 ### Spotify Developer Setup
 1. developer.spotify.com → Create App

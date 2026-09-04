@@ -29,6 +29,7 @@ interface Props {
 export function SoundMatchCard({ candidate, onLike, onPass, onSuperLike, isTop }: Props) {
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
+  const hasSwiped = useRef(false);
   const rotate = translateX.interpolate({ inputRange: [-width, 0, width], outputRange: ['-18deg', '0deg', '18deg'] });
   const likeOpacity = translateX.interpolate({ inputRange: [0, SWIPE_THRESHOLD], outputRange: [0, 1], extrapolate: 'clamp' });
   const passOpacity = translateX.interpolate({ inputRange: [-SWIPE_THRESHOLD, 0], outputRange: [1, 0], extrapolate: 'clamp' });
@@ -56,6 +57,8 @@ export function SoundMatchCard({ candidate, onLike, onPass, onSuperLike, isTop }
   ).current;
 
   const swipeOut = (dir: 'left' | 'right' | 'up') => {
+    if (hasSwiped.current) return;
+    hasSwiped.current = true;
     const toX = dir === 'right' ? width * 1.5 : dir === 'left' ? -width * 1.5 : 0;
     const toY = dir === 'up' ? -500 : 0;
     Animated.parallel([

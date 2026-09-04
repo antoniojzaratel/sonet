@@ -75,6 +75,26 @@ export async function registerForPushNotifications(userId: string): Promise<void
   }
 }
 
+/**
+ * Call before clearing local session state on sign-out. `push_tokens`' PK is
+ * (user_id, token), not token alone — without this, signing out on a
+ * shared/resold device and having someone else sign in and register left
+ * both rows in place, so a push meant for the first user (still matched by
+ * their now-stale row) landed on the second user's device instead.
+ */
+export async function unregisterPushToken(userId: string): Promise<void> {
+  const Notifications = loadNotifications();
+  if (!Notifications) return;
+
+  try {
+    const { data: token } = await Notifications.getExpoPushTokenAsync();
+    if (!token) return;
+    await supabase.from('push_tokens').delete().eq('user_id', userId).eq('token', token);
+  } catch {
+    // Best-effort — a failed cleanup shouldn't block sign-out.
+  }
+}
+
 /** Best-effort — fire and forget. Never throws, never awaited by UI flows that shouldn't wait on it. */
 export async function sendPushTo(userId: string, title: string, body: string, data?: Record<string, unknown>): Promise<void> {
   try {

@@ -43,6 +43,8 @@ interface GamesState {
   loading: boolean;
   stats: GamesStats;
   loadingStats: boolean;
+  /** Internal reentrancy guard for submitGuess — see comment there. */
+  _submittingGuess: boolean;
 
   loadToday: (userId: string) => Promise<void>;
   submitGuess: (userId: string, guessText: string) => Promise<{ correct: boolean; answerName: string | null }>;
@@ -69,6 +71,7 @@ export const useGamesStore = create<GamesState>((set, get) => ({
   loading: false,
   stats: { currentStreak: 3, bestStreak: 7, totalSolved: 12 },
   loadingStats: false,
+  _submittingGuess: false,
 
   loadToday: async (userId) => {
     set({ loading: true });
@@ -124,64 +127,79 @@ export const useGamesStore = create<GamesState>((set, get) => ({
   },
 
   submitGuess: async (userId, guessText) => {
+    // Reentrancy guard: submitGuess reads `get().attempt` once at the top and
+    // upserts the whole guesses/attemptCount array at the end — two
+    // overlapping calls (any caller, not just this store's own UI) would
+    // both read the same pre-guess state and the later upsert would
+    // silently overwrite the earlier one's guess. Unlike raceStore's atomic
+    // server-side RPC, this round-trips through client state, so it needs
+    // its own lock rather than relying on a component's local `submitting`
+    // flag (which lags a render behind the actual call).
+    if (get()._submittingGuess) return { correct: false, answerName: null };
+
     const { attempt } = get();
     if (!attempt || attempt.solved || attempt.attemptCount >= MAX_ATTEMPTS) {
       return { correct: false, answerName: null };
     }
+    set({ _submittingGuess: true });
 
-    if (useAuthStore.getState().isRichDemo && demoSeed) {
-      const correct = checkGuessLocally(demoSeed, guessText);
+    try {
+      if (useAuthStore.getState().isRichDemo && demoSeed) {
+        const correct = checkGuessLocally(demoSeed, guessText);
+        const guesses = [...attempt.guesses, { text: guessText, correct }];
+        const attemptCount = attempt.attemptCount + 1;
+        const solved = correct;
+        const streak = solved ? attempt.streak + 1 : attempt.streak;
+        set({ attempt: { date: attempt.date, guesses, solved, attemptCount, streak } });
+        return { correct, answerName: correct ? demoSeed.answerName : null };
+      }
+
+      const { data, error } = await supabase.rpc('check_daily_guess', {
+        p_date: attempt.date,
+        p_guess: guessText,
+      });
+      if (error) return { correct: false, answerName: null };
+
+      const result = (data as { correct: boolean; answer_name: string | null }[] | null)?.[0];
+      const correct = result?.correct ?? false;
+      const answerName = result?.answer_name ?? null;
+
       const guesses = [...attempt.guesses, { text: guessText, correct }];
       const attemptCount = attempt.attemptCount + 1;
       const solved = correct;
-      const streak = solved ? attempt.streak + 1 : attempt.streak;
-      set({ attempt: { date: attempt.date, guesses, solved, attemptCount, streak } });
-      return { correct, answerName: correct ? demoSeed.answerName : null };
+
+      let streak = attempt.streak;
+      if (solved) {
+        const yesterday = dateOffsetString(attempt.date, -1);
+        const { data: prevRow } = await supabase
+          .from('game_attempts')
+          .select('solved, streak')
+          .eq('user_id', userId)
+          .eq('date', yesterday)
+          .maybeSingle();
+        streak = prevRow?.solved ? (prevRow.streak ?? 0) + 1 : 1;
+      }
+
+      const nextAttempt: GameAttemptState = { date: attempt.date, guesses, solved, attemptCount, streak };
+
+      await supabase.from('game_attempts').upsert(
+        {
+          user_id: userId,
+          date: attempt.date,
+          guesses,
+          solved,
+          attempt_count: attemptCount,
+          streak,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,date' }
+      );
+
+      set({ attempt: nextAttempt });
+      return { correct, answerName };
+    } finally {
+      set({ _submittingGuess: false });
     }
-
-    const { data, error } = await supabase.rpc('check_daily_guess', {
-      p_date: attempt.date,
-      p_guess: guessText,
-    });
-    if (error) return { correct: false, answerName: null };
-
-    const result = (data as { correct: boolean; answer_name: string | null }[] | null)?.[0];
-    const correct = result?.correct ?? false;
-    const answerName = result?.answer_name ?? null;
-
-    const guesses = [...attempt.guesses, { text: guessText, correct }];
-    const attemptCount = attempt.attemptCount + 1;
-    const solved = correct;
-
-    let streak = attempt.streak;
-    if (solved) {
-      const yesterday = dateOffsetString(attempt.date, -1);
-      const { data: prevRow } = await supabase
-        .from('game_attempts')
-        .select('solved, streak')
-        .eq('user_id', userId)
-        .eq('date', yesterday)
-        .maybeSingle();
-      streak = prevRow?.solved ? (prevRow.streak ?? 0) + 1 : 1;
-    }
-
-    const nextAttempt: GameAttemptState = { date: attempt.date, guesses, solved, attemptCount, streak };
-
-    await supabase.from('game_attempts').upsert(
-      {
-        user_id: userId,
-        date: attempt.date,
-        guesses,
-        solved,
-        attempt_count: attemptCount,
-        streak,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'user_id,date' }
-    );
-
-    set({ attempt: nextAttempt });
-    return { correct, answerName };
   },
 
   loadStats: async (userId) => {

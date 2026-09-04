@@ -81,10 +81,9 @@ export function DiscoveryRoulette({ onExit }: Props) {
           <Ionicons name="shuffle" size={56} color={Colors.secondary} style={{ marginBottom: Spacing.sm }} />
           <Text style={styles.finishedTitle}>¡Ronda completada!</Text>
           <Text style={styles.finishedSub}>Te gustaron {liked.length} canciones</Text>
-          <Text style={styles.finishedHint}>Se añadirán a tu playlist de Sonet</Text>
           <TouchableOpacity onPress={onExit} activeOpacity={0.8}>
             <LinearGradient colors={[Colors.secondary, '#65A30D']} style={styles.exitButton}>
-              <Text style={styles.exitButtonText}>Ver playlist</Text>
+              <Text style={styles.exitButtonText}>Continuar</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -231,7 +230,6 @@ const styles = StyleSheet.create({
   finishedEmoji: { fontSize: 72 },
   finishedTitle: { fontSize: 28, fontWeight: '800', color: Colors.text },
   finishedSub: { fontSize: 16, color: Colors.textSecondary },
-  finishedHint: { fontSize: 13, color: Colors.textMuted, textAlign: 'center' },
   exitButton: { borderRadius: Radius.md, paddingVertical: 14, paddingHorizontal: Spacing.xxl, marginTop: Spacing.md },
   exitButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

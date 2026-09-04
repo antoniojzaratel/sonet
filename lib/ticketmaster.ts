@@ -4,7 +4,7 @@
  */
 
 const BASE_URL = 'https://app.ticketmaster.com/discovery/v2';
-const API_KEY = process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY!;
+const API_KEY = process.env.EXPO_PUBLIC_TICKETMASTER_API_KEY ?? '';
 
 export interface TicketmasterEvent {
   id: string;
@@ -53,8 +53,10 @@ export interface ConcertResult {
   currency?: string;
   genres: string[];
   is_sold_out: boolean;
-  source: 'ticketmaster';
+  source: ConcertSource;
 }
+
+export type ConcertSource = 'ticketmaster' | 'songkick' | 'bandsintown' | 'seatgeek';
 
 export async function searchConcerts(params: {
   keyword?: string;

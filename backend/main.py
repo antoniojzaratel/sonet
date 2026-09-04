@@ -3,7 +3,6 @@ Sonet ML Backend — FastAPI
 Endpoints consumed by the mobile app via Supabase Edge Function proxy.
 """
 import os
-import asyncio
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
@@ -12,7 +11,7 @@ from pydantic import BaseModel
 from supabase import create_client, Client
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from music_dna import compute_and_store_dna, build_embedding
+from music_dna import compute_and_store_dna
 from svm_model import get_model, build_training_data, _pair_features
 from recommendations import run_daily_batch, generate_daily_recommendation
 from catalog_sync import run_full_sync
@@ -85,18 +84,20 @@ async def compute_compatibility(req: CompatibilityRequest, supabase: Client = De
     model = get_model()
     result = model.predict(vec_a, vec_b, dna_a, dna_b)
 
+    # compatibility_scores' actual columns match matchEngine.ts's shape
+    # (audio_score/genre_score/behavior_score), not the richer per-dimension
+    # breakdown CompatibilityResult carries — fold rhythm+mood (both
+    # audio-derived) into audio_score, and treat discovery_match as the
+    # behavioral-similarity signal.
     row = {
         "user_a": min(req.user_a, req.user_b),
         "user_b": max(req.user_a, req.user_b),
-        "taste_score":     result.taste_score,
-        "rhythm_match":    result.rhythm_match,
-        "mood_match":      result.mood_match,
-        "era_match":       result.era_match,
-        "language_match":  result.language_match,
-        "genre_match":     result.genre_match,
-        "discovery_match": result.discovery_match,
-        "shared_genres":   result.shared_genres,
-        "shared_artists":  result.shared_artists,
+        "taste_score":    result.taste_score,
+        "audio_score":    round((result.rhythm_match + result.mood_match) / 2, 1),
+        "genre_score":    result.genre_match,
+        "behavior_score": result.discovery_match,
+        "shared_genres":  result.shared_genres,
+        "shared_artists": result.shared_artists,
     }
     supabase.table("compatibility_scores").upsert(row).execute()
 
@@ -182,15 +183,20 @@ async def get_soundmatch_candidates(user_id: str, limit: int = 20, supabase: Cli
 
     candidate_ids = [p["user_id"] for p in (profiles.data or []) if p["user_id"] not in swiped_ids]
 
-    # Get compatibility scores for candidates
+    # Get compatibility scores for candidates — user_id can be stored as
+    # either user_a or user_b (canonical ordering), and so can each
+    # candidate, so match on both sides explicitly rather than filtering by
+    # a single column.
+    candidate_set = set(candidate_ids)
     compat = supabase.table("compatibility_scores").select("*").or_(
         f"user_a.eq.{user_id},user_b.eq.{user_id}"
-    ).in_(f"user_a" if True else "user_b", candidate_ids).execute()
+    ).execute()
 
     score_map: dict[str, float] = {}
     for row in (compat.data or []):
         other = row["user_b"] if row["user_a"] == user_id else row["user_a"]
-        score_map[other] = row.get("taste_score", 0)
+        if other in candidate_set:
+            score_map[other] = row.get("taste_score", 0)
 
     candidates = []
     for p in (profiles.data or []):
@@ -272,13 +278,16 @@ async def trigger_catalog_sync(background_tasks: BackgroundTasks, supabase: Clie
 async def startup():
     db = get_supabase()
 
-    # Daily recs at 00:05 UTC
-    scheduler.add_job(lambda: asyncio.create_task(run_daily_batch(db)), "cron", hour=0, minute=5)
+    # Daily recs at 00:05 UTC — pass the coroutine function directly (not
+    # wrapped in asyncio.create_task) so APScheduler actually awaits it,
+    # can report exceptions instead of losing them as "never retrieved",
+    # and its max_instances overlap guard covers the real work.
+    scheduler.add_job(run_daily_batch, "cron", hour=0, minute=5, args=[db])
 
     # Catalog sync at 03:00 UTC
     scheduler.add_job(
-        lambda: asyncio.create_task(run_full_sync(SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, TICKETMASTER_KEY, YOUTUBE_KEY, db)),
-        "cron", hour=3, minute=0,
+        run_full_sync, "cron", hour=3, minute=0,
+        args=[SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, TICKETMASTER_KEY, YOUTUBE_KEY, db],
     )
 
     scheduler.start()
